@@ -104,7 +104,7 @@ function setupCanvas(c) {
   return { ctx, w: r.width, h: r.height };
 }
 
-function drawGrid(ctx, w, h, color = "#182033") {
+function drawGrid(ctx, w, h, color = "#e8edf4") {
   ctx.strokeStyle = color;
   ctx.lineWidth = 1;
   ctx.beginPath();
@@ -182,7 +182,7 @@ function yOfUnit(u, h) {
 }
 
 function drawScaleHint(ctx, h, text) {
-  ctx.fillStyle = "rgba(139,151,171,0.85)";
+  ctx.fillStyle = "rgba(100,116,139,0.9)";
   ctx.font = '10px "IBM Plex Mono", monospace';
   ctx.textAlign = "left";
   ctx.fillText(text, 10, h - 6);
@@ -415,7 +415,10 @@ function updateHud() {
   $("pill-mad").classList.toggle("adv", pos === ADVANCED || pos === ADVANCING);
   const p = controllerProbs[i] ?? 0;
   $("m-p").textContent = p.toFixed(2);
-  $("m-adv").textContent = String(sim.nAdvances);
+  const advSoFar = sim.actions
+    .slice(0, i + 1)
+    .reduce((n, a) => n + (a === ADVANCE ? 1 : 0), 0);
+  $("m-adv").textContent = `${advSoFar} / ${sim.nAdvances}`;
   const frac = sim.advanced.length
     ? sim.advanced.slice(0, i + 1).reduce((a, b) => a + b, 0) / (i + 1)
     : 0;
@@ -439,7 +442,7 @@ function updateHud() {
   const jaw = $("jaw-fill");
   const x = pos === RETRACTED ? 14 : pos === ADVANCED ? 186 : 100;
   jaw.setAttribute("x", String(x));
-  jaw.setAttribute("fill", pos === RETRACTED ? "#64748b" : "#c4f25a");
+  jaw.setAttribute("fill", pos === RETRACTED ? "#94a3b8" : "#65a30d");
   $("clock").textContent = `${fmt(tNow)} / ${fmt(pack.duration_sec)}`;
   $("now-air").textContent = `t = ${fmt(tNow)}`;
   $("now-overlay").textContent = `t = ${fmt(tNow)}`;
@@ -463,13 +466,13 @@ function drawEvents(ctx, h, tLeft, tRight, w, now) {
     if (e.end < tLeft || e.start > Math.min(tRight, now)) continue;
     const x0 = xOf(e.start, tLeft, tRight, w);
     const x1 = xOf(Math.min(e.end, now), tLeft, tRight, w);
-    ctx.fillStyle = e.kind === "obstructive" ? "rgba(255,176,32,0.28)" : "rgba(192,132,252,0.28)";
+    ctx.fillStyle = e.kind === "obstructive" ? "rgba(217,119,6,0.22)" : "rgba(147,51,234,0.18)";
     ctx.fillRect(x0, 0, Math.max(2, x1 - x0), h);
-    ctx.fillStyle = e.kind === "obstructive" ? "#ffb020" : "#c084fc";
+    ctx.fillStyle = e.kind === "obstructive" ? "#d97706" : "#9333ea";
     ctx.font = "11px IBM Plex Sans";
     ctx.fillText(e.kind === "obstructive" ? "OA" : "HYP", x0 + 4, 16);
     if (e.is_cluster_first) {
-      ctx.fillStyle = "#38bdf8";
+      ctx.fillStyle = "#0284c7";
       ctx.beginPath();
       ctx.moveTo(x0 - 5, h);
       ctx.lineTo(x0 + 5, h);
@@ -478,7 +481,7 @@ function drawEvents(ctx, h, tLeft, tRight, w, now) {
       ctx.fill();
     }
   }
-  ctx.strokeStyle = "#ffe08a";
+  ctx.strokeStyle = "#ca8a04";
   ctx.lineWidth = 2;
   for (const a of pack.arousals) {
     if (a.start < tLeft || a.start > Math.min(tRight, now)) continue;
@@ -491,7 +494,7 @@ function drawEvents(ctx, h, tLeft, tRight, w, now) {
 }
 
 function drawAdvanced(ctx, h, tLeft, tRight, w, now, veilNoteId = null) {
-  ctx.fillStyle = "rgba(100,116,139,0.28)";
+  ctx.fillStyle = "rgba(148,163,184,0.28)";
   let run = null;
   const n = sim.advanced.length;
   for (let t = Math.max(0, Math.floor(tLeft)); t <= Math.min(n - 1, Math.ceil(tRight)); t++) {
@@ -515,8 +518,8 @@ function drawAdvanced(ctx, h, tLeft, tRight, w, now, veilNoteId = null) {
   if (sim.advanced[i]) {
     const xNow = xOf(now, tLeft, tRight, w);
     const grd = ctx.createLinearGradient(xNow, 0, w, 0);
-    grd.addColorStop(0, "rgba(15,23,42,0.15)");
-    grd.addColorStop(1, "rgba(15,23,42,0.55)");
+    grd.addColorStop(0, "rgba(241,245,249,0.2)");
+    grd.addColorStop(1, "rgba(226,232,240,0.75)");
     ctx.fillStyle = grd;
     ctx.fillRect(xNow, 0, Math.max(0, w - xNow), h);
     note.style.display = "block";
@@ -528,7 +531,7 @@ function drawAdvanced(ctx, h, tLeft, tRight, w, now, veilNoteId = null) {
 
 function drawNow(ctx, h, tLeft, tRight, w, now) {
   const x = xOf(now, tLeft, tRight, w);
-  ctx.strokeStyle = "#f8fafc";
+  ctx.strokeStyle = "#0f172a";
   ctx.lineWidth = 1.5;
   ctx.setLineDash([4, 4]);
   ctx.beginPath();
@@ -548,7 +551,7 @@ function drawAir(tLeft, tRight, now) {
     values: pack.pres,
     fs: pack.fs_pres,
     range: NORM.pres,
-    color: "#5ec8ff",
+    color: "#0284c7",
     width: 1.4,
     tLeft,
     tRight,
@@ -570,7 +573,7 @@ function drawSpo2(tLeft, tRight, now) {
     values: pack.spo2,
     fs: pack.fs_decision,
     range: NORM.spo2,
-    color: "#ff6b8a",
+    color: "#e11d48",
     width: 2,
     tLeft,
     tRight,
@@ -603,7 +606,7 @@ function drawOverlay(tLeft, tRight, now) {
   const p1 = Math.min(controllerProbs.length, Math.floor(Math.min(tRight, now)) + 1);
   if (p1 > p0) {
     ctx.beginPath();
-    ctx.fillStyle = "rgba(196,242,90,0.1)";
+    ctx.fillStyle = "rgba(132,204,22,0.16)";
     ctx.moveTo(xOf(p0, tLeft, tRight, w), h);
     for (let i = p0; i < p1; i++) {
       ctx.lineTo(xOf(i, tLeft, tRight, w), yOfUnit(controllerProbs[i], h));
@@ -616,7 +619,7 @@ function drawOverlay(tLeft, tRight, now) {
     values: pack.pres,
     fs: pack.fs_pres,
     range: NORM.pres,
-    color: "rgba(94,200,255,0.7)",
+    color: "rgba(2,132,199,0.7)",
     width: 1.2,
     tLeft,
     tRight,
@@ -628,7 +631,7 @@ function drawOverlay(tLeft, tRight, now) {
     values: pack.spo2,
     fs: pack.fs_decision,
     range: NORM.spo2,
-    color: "#ff6b8a",
+    color: "#e11d48",
     width: 2,
     tLeft,
     tRight,
@@ -640,7 +643,7 @@ function drawOverlay(tLeft, tRight, now) {
     values: pack.active,
     fs: pack.fs_decision,
     range: unitRange,
-    color: "rgba(148,163,184,0.75)",
+    color: "rgba(100,116,139,0.8)",
     width: 1.1,
     tLeft,
     tRight,
@@ -652,7 +655,7 @@ function drawOverlay(tLeft, tRight, now) {
     values: controllerProbs,
     fs: pack.fs_decision,
     range: unitRange,
-    color: "#c4f25a",
+    color: "#4d7c0f",
     width: 2.2,
     tLeft,
     tRight,
@@ -672,7 +675,7 @@ function drawOverlay(tLeft, tRight, now) {
 function drawModel(tLeft, tRight, now) {
   const { ctx, w, h } = setupCanvas($("c-model"));
   ctx.clearRect(0, 0, w, h);
-  drawGrid(ctx, w, h, "#152033");
+  drawGrid(ctx, w, h, "#e8edf4");
   drawAdvanced(ctx, h, tLeft, tRight, w, now);
   const yThr = h - ctrl.threshold * (h - 8) - 4;
   ctx.strokeStyle = "#64748b";
@@ -689,7 +692,7 @@ function drawModel(tLeft, tRight, now) {
     return;
   }
   ctx.beginPath();
-  ctx.fillStyle = "rgba(196,242,90,0.18)";
+  ctx.fillStyle = "rgba(132,204,22,0.2)";
   ctx.moveTo(xOf(i0, tLeft, tRight, w), h);
   for (let i = i0; i < i1; i++) {
     const y = h - controllerProbs[i] * (h - 8) - 4;
@@ -699,7 +702,7 @@ function drawModel(tLeft, tRight, now) {
   ctx.closePath();
   ctx.fill();
   ctx.beginPath();
-  ctx.strokeStyle = "#c4f25a";
+  ctx.strokeStyle = "#4d7c0f";
   ctx.lineWidth = 1.8;
   for (let i = i0; i < i1; i++) {
     const y = h - controllerProbs[i] * (h - 8) - 4;
@@ -709,7 +712,7 @@ function drawModel(tLeft, tRight, now) {
   }
   ctx.stroke();
   ctx.beginPath();
-  ctx.strokeStyle = "rgba(94,200,255,0.7)";
+  ctx.strokeStyle = "rgba(2,132,199,0.75)";
   ctx.lineWidth = 1.2;
   for (let i = i0; i < i1; i++) {
     const y = h - pack.active[i] * (h - 8) - 4;
@@ -726,17 +729,17 @@ function drawMini(now) {
   ctx.clearRect(0, 0, w, h);
   const n = pack.duration_sec;
   for (const e of pack.events) {
-    ctx.fillStyle = e.kind === "obstructive" ? "#ffb020" : "#c084fc";
+    ctx.fillStyle = e.kind === "obstructive" ? "#d97706" : "#9333ea";
     ctx.fillRect((e.start / n) * w, 4, Math.max(2, ((e.end - e.start) / n) * w), h - 8);
   }
   for (let t = 0; t < sim.advanced.length; t++) {
     if (!sim.advanced[t]) continue;
-    ctx.fillStyle = "rgba(148,163,184,0.45)";
+    ctx.fillStyle = "rgba(148,163,184,0.4)";
     ctx.fillRect((t / n) * w, 0, w / n + 0.5, h);
   }
   for (const t of coldStartTimes()) {
     const x = (t / n) * w;
-    ctx.fillStyle = "#38bdf8";
+    ctx.fillStyle = "#0284c7";
     ctx.beginPath();
     ctx.moveTo(x - 4, 0);
     ctx.lineTo(x + 4, 0);
@@ -745,9 +748,9 @@ function drawMini(now) {
     ctx.fill();
   }
   const xNow = (now / n) * w;
-  ctx.fillStyle = "rgba(7,9,13,0.62)"; // clip map: dim the part not played yet
+  ctx.fillStyle = "rgba(248,250,252,0.72)"; // clip map: dim the part not played yet
   ctx.fillRect(xNow, 0, Math.max(0, w - xNow), h);
-  ctx.fillStyle = "#f8fafc";
+  ctx.fillStyle = "#0f172a";
   ctx.fillRect(xNow, 0, 2, h);
 }
 
@@ -820,15 +823,26 @@ function seekBefore(start) {
   render();
 }
 
-// Opening frame: first cold start that has a full pre-roll of history behind it
-// and finds the device retracted, so the advance happens in front of the audience.
+// Opening frame: prefer an OA cold start when the policy is OA-only; otherwise the
+// first cold start that has a full pre-roll of history and finds the device retracted.
 function burstT() {
   const cold = coldStartTimes();
-  const withHistory = cold.filter((t) => t >= PRE_ROLL_SEC + 20);
+  let preferred = cold;
+  if ($("policy-source").value === "oracle") {
+    const kinds = selectedKinds();
+    if (kinds.size === 1 && kinds.has("obstructive")) {
+      const oaCold = pack.events
+        .filter((e) => e.is_cluster_first && e.kind === "obstructive")
+        .map((e) => e.start)
+        .sort((a, b) => a - b);
+      if (oaCold.length) preferred = oaCold;
+    }
+  }
+  const withHistory = preferred.filter((t) => t >= PRE_ROLL_SEC + 20);
   const retracted = withHistory.filter(
     (t) => !sim.advanced[Math.floor(t - PRE_ROLL_SEC)],
   );
-  const pick = retracted[0] ?? withHistory[0] ?? cold[0];
+  const pick = retracted[0] ?? withHistory[0] ?? preferred[0] ?? cold[0];
   if (pick == null) return 0;
   return Math.max(0, pick - PRE_ROLL_SEC);
 }
@@ -920,9 +934,19 @@ function updatePolicyUi() {
   for (const id of ["target-oa", "target-hyp", "target-unsure", "p-lag", "p-lead"]) {
     $(id).disabled = !oracle;
   }
-  $("oracle-note").textContent = oracle
-    ? "Oracle: kind from scored annotations, not a real-time classifier."
-    : "Combined model (OA + hypopnea + Unsure): kind cannot be switched.";
+  if (!oracle) {
+    $("oracle-note").textContent =
+      "Combined model (OA + hypopnea + Unsure): kind cannot be switched.";
+    return;
+  }
+  const kinds = selectedKinds();
+  if (kinds.size === 1 && kinds.has("obstructive")) {
+    $("oracle-note").textContent =
+      "OA-only presentation: advances only on obstructive apnea.";
+  } else {
+    $("oracle-note").textContent =
+      "Oracle: kind from scored annotations, not a real-time classifier.";
+  }
 }
 
 async function boot() {

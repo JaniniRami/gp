@@ -67,8 +67,8 @@
         <div class="card">
           <h2>Actuator</h2>
           <svg class="jaw" id="jaw" viewBox="0 0 240 48" aria-hidden="true">
-            <rect x="4" y="6" width="232" height="36" rx="10" fill="#0b0f16" stroke="#2a364a"/>
-            <rect id="jaw-fill" x="14" y="14" width="40" height="20" rx="6" fill="#64748b"/>
+            <rect x="4" y="6" width="232" height="36" rx="10" fill="#f8fafc" stroke="#cbd5e1"/>
+            <rect id="jaw-fill" x="14" y="14" width="40" height="20" rx="6" fill="#94a3b8"/>
           </svg>
           <div class="state-name" id="mad-state">RETRACTED</div>
           <div class="state-sub" id="mad-sub">Waiting for fire_now above threshold</div>
@@ -92,16 +92,16 @@
           <label class="field">Input source
             <select id="policy-source">
               <option value="model">Combined model (honest)</option>
-              <option value="oracle">Annotation oracle (presentation)</option>
+              <option value="oracle" selected>Annotation oracle (OA cases)</option>
             </select>
           </label>
           <div class="target-row">
-            <label><input type="checkbox" id="target-oa" checked disabled /> OA</label>
-            <label><input type="checkbox" id="target-hyp" checked disabled /> Hypopnea</label>
-            <label><input type="checkbox" id="target-unsure" checked disabled /> Unsure</label>
+            <label><input type="checkbox" id="target-oa" checked /> OA</label>
+            <label><input type="checkbox" id="target-hyp" /> Hypopnea</label>
+            <label><input type="checkbox" id="target-unsure" /> Unsure</label>
           </div>
           <div class="oracle-note" id="oracle-note">
-            Combined model: kind cannot be switched.
+            OA-only presentation: advances only on obstructive apnea.
           </div>
           <div class="param-grid">
             <label>Advance (s)<input id="p-advance" type="number" min="1" max="30" value="10" /></label>
@@ -138,16 +138,16 @@
           <div class="veil-note" id="veil-note-overlay" style="display:none;right:18%"></div>
           <canvas id="c-overlay"></canvas>
         </div>
-        <canvas id="c-mini" style="border-radius:8px;border:1px solid #1e2633;background:#0b0f16"></canvas>
+        <canvas id="c-mini"></canvas>
         <div class="legend">
-          <div><span class="sw" style="background:#5ec8ff"></span>Pres</div>
-          <div><span class="sw" style="background:#ff6b8a"></span>SpO2</div>
-          <div><span class="sw" style="background:#c4f25a"></span>fire_now</div>
-          <div><span class="sw" style="background:#94a3b8"></span>active</div>
-          <div><span class="sw" style="background:#ffb020"></span>OA</div>
-          <div><span class="sw" style="background:#c084fc"></span>Hypopnea / Unsure</div>
-          <div><span class="sw" style="background:#ffe08a"></span>Arousal</div>
-          <div><span class="sw" style="background:#64748b"></span>MAD advanced (hold)</div>
+          <div><span class="sw" style="background:#0284c7"></span>Pres</div>
+          <div><span class="sw" style="background:#e11d48"></span>SpO2</div>
+          <div><span class="sw" style="background:#4d7c0f"></span>fire_now</div>
+          <div><span class="sw" style="background:#64748b"></span>active</div>
+          <div><span class="sw" style="background:#d97706"></span>OA</div>
+          <div><span class="sw" style="background:#9333ea"></span>Hypopnea / Unsure</div>
+          <div><span class="sw" style="background:#ca8a04"></span>Arousal</div>
+          <div><span class="sw" style="background:#94a3b8"></span>MAD advanced (hold)</div>
           <div><span class="sw cold-sw"></span>Cold start (cluster-first)</div>
         </div>
       </section>
