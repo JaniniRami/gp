@@ -21,7 +21,8 @@ Nothing to the right of the cursor is drawn: signals, scored events, and arousal
 | `static/` | Live-replay website |
 | `server.py` | Local server (opens the browser, optional ESP serial) |
 | `data/clips/*.json` | Example clip library (waveforms, events, model scores) |
-| `data/clips/full_night.json` | Whole-night replay of the best-performing held-out night (severe) |
+| `data/clips/full_night.json` | Whole-night replay of the best-performing held-out night (severe, AHI 58) |
+| `data/clips/moderate_night.json` | Whole-night replay of the best held-out moderate night (AHI 20) |
 | `data/clips/mild_night.json` | Whole-night replay of a mild held-out night (clear duty cycle) |
 | `data/clips/*.edf` | Matching 18 min excerpts (Pres 32 Hz + SpO2 1 Hz) |
 | `data/clips/index.json` | Story text, recommended policy and headline metrics per clip |
@@ -65,6 +66,31 @@ This night was picked by `_build_night.py` on the legacy sparse decision grid (c
 nights on that ranking, not a typical night. The stored `meta.cohort` medians (89%
 coverage at 40% advanced) are from that sparse ranking, not the dense 1 Hz grid the
 player now runs.
+
+## Moderate night (the band a MAD is actually prescribed for)
+
+Pick **Whole night, moderate severity (20.4)**. Oral appliances are first-line for
+mild-to-moderate OSA, so this is the clip to lead with clinically: MESA **4053**,
+NSRR AHI 20.4, played end to end.
+
+| Night | NSRR AHI | Arousal-linked covered | Advances | Night advanced | SpO2 nadir |
+|---|---|---|---|---|---|
+| MESA 4053, 8.6 h | 20.4 (moderate) | 71/73 (97%) | 20 | 57% (fixed MAD = 100%) | 71% |
+
+155 scored events, **33 of them obstructive apneas** (the mild night has only 1), so
+this is the night to tell the OA story on as well. Median lead is 30 s and every
+second of the span is scored at 1 Hz.
+
+It is the top-ranked of 14 held-out moderate nights that passed the gates, out of 58
+scored in the band; the band medians are 92% coverage at 57% of the night advanced,
+so this night is representative of the band rather than a lucky outlier.
+
+State the jaw time honestly. At threshold 0.55 **every** held-out moderate night runs
+the jaw out for 40-79% of the night, so the 40% ceiling that picked the severe
+headline night rejects the whole band. `night_score` now takes the ceiling as an
+argument and moderate screening asks for coverage >= 90% at up to 60% advanced
+(`BAND_GATES`). The claim is 97% of arousal-linked events covered for 57% of the
+night advanced, against 100% advanced for a fixed appliance - not a low duty cycle.
 
 ## Mild night (clearest view of the duty cycle)
 
@@ -217,9 +243,10 @@ the lane clip at the edge, where they still read as saturation; that is 0-2% of
 sleep samples on the story clips and about 7% on the mild night, all of it
 movement artifact.
 
-SpO2 uses percentiles (0.1 to max, capped at 100) over the **sleep** samples only;
-the floor is deliberately that low so the true nadir stays inside the lane instead
-of flattening against the bottom edge.
+SpO2 takes its ceiling from the **sleep** samples, where awake motion artifact
+cannot stretch the top of the lane, and its floor from the deepest valid sample
+anywhere in the clip, so the nadir this demo quotes is always inside the lane
+instead of flattening against the bottom edge.
 Pulse-ox dropout (below 50%) is left as a gap rather than drawn as a desaturation,
 and never sets the range. A flat SpO2 trace on the mild night is real: that night's
 interquartile range is 1% and it never goes below 90%, which is what mild disease
@@ -230,13 +257,20 @@ not hide where the meaningful level is:
 
 | Lane | Reference line |
 |---|---|
-| Pres | **0 = no flow**, mid-lane in every clip. An apnea is the trace collapsing onto it. |
+| Pres | **no flow**, mid-lane in every clip. An apnea is the trace collapsing onto it. |
 | SpO2 | Dashed **90%** plus the axis bounds. 0% is never inside a real SpO2 window, so no zero line is faked; when 90% is off scale the hint says so. |
 | Model heads | Probability **0** and **1** (labels on the right) plus the dashed decision threshold. |
-| Overlay | Probability **0** at the floor, the blue **Pres 0** no-flow line, and the threshold. |
+| Overlay | Probability **0** at the floor, the blue **Pres no flow** line, and the threshold. |
 
 A reference line is only drawn when its value is actually inside that lane's
 display range.
+
+The no-flow line is the breathing **baseline**, not ADC zero: cannula channels carry
+a DC offset (MESA 4053 breathes around +0.26), and measuring the median pressure
+inside obstructive apneas across the clip library puts flow on that baseline to
+within 0.01. Drawing the line at zero would have put it off the bottom of the
+moderate night's lane while the apneas sat mid-lane. The hint prints the level in
+use, so the lane cannot lie about which line means "airway shut".
 
 Nasal pressure is stored at 32 Hz in the 18 min clips and at 8 Hz in the whole-night
 clip (still well above breathing rate) to keep the night to about 3 MB.
@@ -332,6 +366,18 @@ Rebuilding the whole-night clip (needs the MESA caches): `python _build_night.py
 ranks every held-out night, prints the top candidates and the cohort medians, and writes
 `data/clips/full_night.json` plus a merged `index.json`. Run `_build_clips.py` first if you
 are rebuilding both; each script preserves the other's entries.
+
+To screen one severity band and build its best night (this is how the moderate night
+was made):
+
+```bash
+python _build_night.py --moderate --id moderate_night
+```
+
+That takes the held-out nights whose NSRR AHI is 15-30, scores each one end to end on
+the sparse grid, prints the ranking, then rebuilds the winner on the dense 1 Hz grid
+and records the band context (rank, how many nights passed, band medians) in the
+pack's `meta.cohort`. Gates per band live in `BAND_GATES`.
 
 To build a named night for one chosen held-out subject, skipping the ranking (this is how
 the mild night was made):

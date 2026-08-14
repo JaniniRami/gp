@@ -29,8 +29,9 @@ def story_for_pack(pack: dict) -> bc.Story | None:
     cid = pack["meta"].get("story", {}).get("id")
     if cid == bn.STORY.id:
         return bn.STORY
-    if cid == bn.MILD_STORY.id:
-        return bn.story_for(sid, bn.MILD_STORY, bn.nsrr_ahi(sid))
+    for severity in (bn.MILD_STORY, bn.MODERATE_STORY):
+        if cid == severity.id:
+            return bn.story_for(sid, severity, bn.nsrr_ahi(sid))
     return {s.id: s for s in bc.STORIES}.get(cid)
 
 

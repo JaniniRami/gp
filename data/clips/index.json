@@ -2,62 +2,6 @@
   "default": "full_night",
   "clips": [
     {
-      "id": "mild_night",
-      "pack_id": "mild_night",
-      "title": "Whole night, mild severity (5.8)",
-      "watch": "Mild night, AHI 5.8: 12/14 arousal-linked events covered with 15 separate advances, jaw forward 40% of the night against 100% for a fixed MAD.",
-      "policy": {
-        "source": "model",
-        "kinds": [
-          "obstructive",
-          "hypopnea",
-          "unsure"
-        ]
-      },
-      "subject_id": "3901",
-      "clip_start_sec": 600,
-      "duration_sec": 15180,
-      "metrics": {
-        "policy": "model",
-        "threshold": 0.55,
-        "n_events": 28,
-        "n_oa": 1,
-        "n_hyp": 27,
-        "n_cold_starts": 21,
-        "n_linked": 14,
-        "n_covered": 12,
-        "coverage": 0.8571,
-        "n_preemptive": 11,
-        "median_lead_sec": 30.6,
-        "best_oa_lead_sec": 30.0,
-        "median_in_place_lead_sec": 235.5,
-        "best_in_place_lead_sec": 1349.4,
-        "n_in_place_before_onset": 11,
-        "cold_starts_in_place_before_onset": 8,
-        "best_cold_start_lead_sec": 1349.4,
-        "n_fresh_advance_before_onset": 2,
-        "n_fresh_cold_start": 1,
-        "best_fresh_cold_start_lead_sec": 42.8,
-        "best_fresh_oa_cold_start_lead_sec": 0.0,
-        "median_fresh_lead_sec": 40.2,
-        "first_advance_sec": 0,
-        "advances": 15,
-        "advances_per_hour": 3.56,
-        "fraction_advanced": 0.3966,
-        "static_mad_fraction_advanced": 1.0,
-        "duty_saved_vs_static": 0.6034,
-        "max_events_per_advance": 5,
-        "spo2_min": 90.9,
-        "wake_frac": 0.053
-      },
-      "metrics_oracle_oa": null,
-      "cohort": {
-        "threshold": 0.55,
-        "ahi_nsrr": 5.75,
-        "selection": "MESA 3901 was chosen as a severity example (NSRR AHI 5.8), not as the top-ranked night. Fewer events per hour means more quiet between clusters, so each advance and retract is a separate visible decision."
-      }
-    },
-    {
       "id": "full_night",
       "pack_id": "full_night",
       "title": "Whole night, best held-out subject",
@@ -114,6 +58,128 @@
         "median_fraction_advanced": 0.404,
         "threshold": 0.55,
         "note": "Cohort context for the selected night: median over all held-out nights scored end to end at this threshold."
+      }
+    },
+    {
+      "id": "moderate_night",
+      "pack_id": "moderate_night",
+      "title": "Whole night, moderate severity (20.4)",
+      "watch": "Moderate night, AHI 20.4: 71/73 arousal-linked events covered with 20 separate advances, jaw forward 57% of the night against 100% for a fixed MAD.",
+      "policy": {
+        "source": "model",
+        "kinds": [
+          "obstructive",
+          "hypopnea",
+          "unsure"
+        ]
+      },
+      "subject_id": "4053",
+      "clip_start_sec": 600,
+      "duration_sec": 30960,
+      "metrics": {
+        "policy": "model",
+        "threshold": 0.55,
+        "n_events": 155,
+        "n_oa": 33,
+        "n_hyp": 122,
+        "n_cold_starts": 64,
+        "n_linked": 73,
+        "n_covered": 71,
+        "coverage": 0.9726,
+        "n_preemptive": 71,
+        "median_lead_sec": 30.4,
+        "best_oa_lead_sec": 30.9,
+        "median_in_place_lead_sec": 777.7,
+        "best_in_place_lead_sec": 3689.5,
+        "n_in_place_before_onset": 69,
+        "cold_starts_in_place_before_onset": 24,
+        "best_cold_start_lead_sec": 3689.5,
+        "n_fresh_advance_before_onset": 3,
+        "n_fresh_cold_start": 1,
+        "best_fresh_cold_start_lead_sec": 10.3,
+        "best_fresh_oa_cold_start_lead_sec": 0.0,
+        "median_fresh_lead_sec": 21.9,
+        "first_advance_sec": 9,
+        "advances": 20,
+        "advances_per_hour": 2.33,
+        "fraction_advanced": 0.5728,
+        "static_mad_fraction_advanced": 1.0,
+        "duty_saved_vs_static": 0.4272,
+        "max_events_per_advance": 22,
+        "spo2_min": 71.0,
+        "wake_frac": 0.278
+      },
+      "metrics_oracle_oa": null,
+      "cohort": {
+        "threshold": 0.55,
+        "ahi_nsrr": 20.37,
+        "selection": "MESA 4053 is the top-ranked of 14 held-out moderate nights (NSRR AHI 15.0-30.0) that passed the duty-cycle gates, out of 58 scored in the band. Ranking is the same as the headline night: coverage bought with as little jaw time as possible.",
+        "band": "moderate",
+        "band_ahi_range": [
+          15.0,
+          30.0
+        ],
+        "n_band_scored": 58,
+        "n_band_ranked": 14,
+        "rank_in_band": 1,
+        "band_median_coverage": 0.917,
+        "band_median_fraction_advanced": 0.569
+      }
+    },
+    {
+      "id": "mild_night",
+      "pack_id": "mild_night",
+      "title": "Whole night, mild severity (5.8)",
+      "watch": "Mild night, AHI 5.8: 12/14 arousal-linked events covered with 15 separate advances, jaw forward 40% of the night against 100% for a fixed MAD.",
+      "policy": {
+        "source": "model",
+        "kinds": [
+          "obstructive",
+          "hypopnea",
+          "unsure"
+        ]
+      },
+      "subject_id": "3901",
+      "clip_start_sec": 600,
+      "duration_sec": 15180,
+      "metrics": {
+        "policy": "model",
+        "threshold": 0.55,
+        "n_events": 28,
+        "n_oa": 1,
+        "n_hyp": 27,
+        "n_cold_starts": 21,
+        "n_linked": 14,
+        "n_covered": 12,
+        "coverage": 0.8571,
+        "n_preemptive": 11,
+        "median_lead_sec": 30.6,
+        "best_oa_lead_sec": 30.0,
+        "median_in_place_lead_sec": 235.5,
+        "best_in_place_lead_sec": 1349.4,
+        "n_in_place_before_onset": 11,
+        "cold_starts_in_place_before_onset": 8,
+        "best_cold_start_lead_sec": 1349.4,
+        "n_fresh_advance_before_onset": 2,
+        "n_fresh_cold_start": 1,
+        "best_fresh_cold_start_lead_sec": 42.8,
+        "best_fresh_oa_cold_start_lead_sec": 0.0,
+        "median_fresh_lead_sec": 40.2,
+        "first_advance_sec": 0,
+        "advances": 15,
+        "advances_per_hour": 3.56,
+        "fraction_advanced": 0.3966,
+        "static_mad_fraction_advanced": 1.0,
+        "duty_saved_vs_static": 0.6034,
+        "max_events_per_advance": 5,
+        "spo2_min": 90.9,
+        "wake_frac": 0.053
+      },
+      "metrics_oracle_oa": null,
+      "cohort": {
+        "threshold": 0.55,
+        "ahi_nsrr": 5.75,
+        "selection": "MESA 3901 was chosen as a severity example (NSRR AHI 5.8), not as the top-ranked night. Fewer events per hour means more quiet between clusters, so each advance and retract is a separate visible decision."
       }
     },
     {

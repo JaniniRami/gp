@@ -21,6 +21,7 @@ from __future__ import annotations
 
 import json
 import sys
+from functools import lru_cache
 from pathlib import Path
 
 import joblib
@@ -69,22 +70,58 @@ MILD_STORY = bc.Story(
     order=-1,
 )
 
+# Moderate is the band most MAD candidates sit in, and it is the most useful
+# showcase: enough events per hour that the controller works all night, enough
+# quiet between clusters that every advance is still a separate visible decision.
+MODERATE_STORY = bc.Story(
+    id="moderate_night",
+    title="Whole night, moderate severity (AHI_PLACEHOLDER)",
+    watch=(
+        "Moderate night, AHI AHI_PLACEHOLDER: {n_covered}/{n_linked} arousal-linked "
+        "events covered with {advances} separate advances, jaw forward "
+        "{pct_advanced}% of the night against 100% for a fixed MAD."
+    ),
+    policy={"source": "model", "kinds": bc.MODEL_KINDS},
+    score=lambda s: None,
+    order=-1,
+)
+
+# NSRR AHI cut points; the demo labels severity from the scored AHI, never from
+# how the model happened to perform.
+SEVERITY_BANDS = {
+    "mild": (5.0, 15.0),
+    "moderate": (15.0, 30.0),
+    "severe": (30.0, float("inf")),
+}
+
+# Screening gates per band. A moderate night earns its coverage by keeping the jaw
+# out for about half the night; demand the coverage instead and let the score pick
+# the cheapest jaw time available in the band.
+BAND_GATES = {"moderate": {"min_coverage": 0.90, "max_frac": 0.60}}
+
+NIGHT_ORDER = ("full_night", "moderate_night", "mild_night")
+
 AHI_CSV = (
     ROOT / "Data/mesa_runs/mechanism_cold_v1_fix/sex_ahi_coverage_diagnostic_nights.csv"
 )
 
 
-def nsrr_ahi(sid: str) -> float | None:
-    """AHI from the NSRR diagnostic table, for labelling severity honestly."""
+@lru_cache(maxsize=1)
+def ahi_table() -> dict[str, float]:
     import csv
 
     if not AHI_CSV.is_file():
-        return None
+        return {}
     with AHI_CSV.open() as f:
-        for row in csv.DictReader(f):
-            if str(int(row["subject_id"])) == str(int(sid)):
-                return float(row["ahi_nsrr"])
-    return None
+        return {
+            str(int(row["subject_id"])): float(row["ahi_nsrr"])
+            for row in csv.DictReader(f)
+        }
+
+
+def nsrr_ahi(sid: str) -> float | None:
+    """AHI from the NSRR diagnostic table, for labelling severity honestly."""
+    return ahi_table().get(str(int(sid)))
 
 
 def story_for(sid: str, story: bc.Story, ahi: float | None) -> bc.Story:
@@ -165,15 +202,24 @@ def spo2_quality(spo2: np.ndarray) -> dict:
     return {"valid_frac": frac, "gap": int(longest), "ok": frac >= 0.97 and longest <= 300}
 
 
-def night_score(s: dict) -> tuple[float | None, str]:
-    """Coverage bought with as little jaw time as possible."""
+def night_score(
+    s: dict, *, min_coverage: float = 0.85, max_frac: float = 0.40
+) -> tuple[float | None, str]:
+    """Coverage bought with as little jaw time as possible.
+
+    The jaw-time ceiling is a demo constraint, not a clinical one, and it has to
+    move with severity: at threshold 0.55 every held-out moderate night runs the
+    jaw out for 40-79% of the night, so the 0.40 ceiling that picked the headline
+    night rejects the entire moderate band. Callers screening a band pass their
+    own limits and the score still prefers the lowest jaw time.
+    """
     # a whole-night replay needs the advance/retract cycle to repeat often enough
     # that the audience sees it happen many times, not a quiet night
     if s["n_linked"] < 25:
         return None, f"few_linked({s['n_linked']})"
-    if s["coverage"] < 0.85:
+    if s["coverage"] < min_coverage:
         return None, f"coverage({s['coverage']:.2f})"
-    if s["frac"] > 0.40:
+    if s["frac"] > max_frac:
         return None, f"frac({s['frac']:.2f})"
     # MESA is hypopnea-dominated; still refuse a night with no obstructive apnea at
     # all, so the OA story can be told on the same recording
@@ -334,7 +380,10 @@ def merge_index(entry: dict, *, make_default: bool = True) -> None:
     doc = json.loads(path.read_text()) if path.is_file() else {"clips": []}
     clips = [c for c in doc.get("clips", []) if c["id"] != entry["id"]]
     clips.insert(0, entry)  # the nights are the headline examples
-    doc["clips"] = clips
+    # keep the whole nights at the front of the menu, severe to mild, so the list
+    # reads as a severity ladder instead of as build order
+    nights = [c for wanted in NIGHT_ORDER for c in clips if c["id"] == wanted]
+    doc["clips"] = nights + [c for c in clips if c["id"] not in NIGHT_ORDER]
     if make_default or not doc.get("default"):
         doc["default"] = entry["id"]
     path.write_text(json.dumps(doc, indent=2) + "\n")
@@ -342,7 +391,13 @@ def merge_index(entry: dict, *, make_default: bool = True) -> None:
 
 
 def build_subject(
-    sid: str, story: bc.Story, out_name: str, *, make_default: bool = False
+    sid: str,
+    story: bc.Story,
+    out_name: str,
+    *,
+    make_default: bool = False,
+    cohort_extra: dict | None = None,
+    selection: str | None = None,
 ) -> int:
     """Build one named night pack for an explicitly chosen held-out subject.
 
@@ -403,12 +458,14 @@ def build_subject(
     cohort = {
         "threshold": bc.THR,
         "ahi_nsrr": ahi,
-        "selection": (
+        "selection": selection
+        or (
             f"MESA {sid} was chosen as a severity example (NSRR AHI "
             f"{'unknown' if ahi is None else f'{ahi:.1f}'}), not as the top-ranked "
             "night. Fewer events per hour means more quiet between clusters, so each "
             "advance and retract is a separate visible decision."
         ),
+        **(cohort_extra or {}),
     }
     pack = build(night, stats, cohort, story=story, out_name=out_name)
     m = pack["meta"]["metrics"]["model"]
@@ -438,28 +495,31 @@ def build_subject(
     return 0
 
 
-def main() -> int:
-    argv = sys.argv[1:]
-    if "--sid" in argv:
-        sid = argv[argv.index("--sid") + 1]
-        story = STORY if "--headline" in argv else MILD_STORY
-        out_name = argv[argv.index("--id") + 1] if "--id" in argv else story.id
-        return build_subject(sid, story, out_name, make_default="--default" in argv)
-    limit = int(argv[0]) if argv else 0
-    ki = bc.keep_idx_164()
-    fire = joblib.load(bc.MODEL_DIR / "xgb_fire_now.joblib")
-    active = joblib.load(bc.MODEL_DIR / "xgb_active.joblib")
-
+def held_out_nights() -> list[str]:
     sids = sorted(p.stem for p in bc.NPZ_DIR.glob("*.npz"))
-    test = [
-        s
-        for s in hash_stable_split(sids).test
-        if (bc.H5_DIR / f"mesa-{s}.h5").is_file()
+    return [
+        s for s in hash_stable_split(sids).test if (bc.H5_DIR / f"mesa-{s}.h5").is_file()
     ]
-    if limit:
-        test = test[:limit]
-    print(f"ranking {len(test)} held-out nights", flush=True)
 
+
+def band_nights(band: str) -> list[str]:
+    """Held-out nights whose scored NSRR AHI puts them in one severity band."""
+    lo, hi = SEVERITY_BANDS[band]
+    return [
+        sid
+        for sid in held_out_nights()
+        if (a := nsrr_ahi(sid)) is not None and lo <= a < hi
+    ]
+
+
+def rank_nights(
+    test: list[str], fire, active, ki, **gates: float
+) -> list[dict]:
+    """Score each night end to end on the sparse grid: candidate screening only.
+
+    Cheap enough to sweep a whole band. The night that wins is then rebuilt on the
+    dense 1 Hz grid, which is what the player actually replays.
+    """
     rows: list[dict] = []
     for k, sid in enumerate(test, 1):
         try:
@@ -478,10 +538,10 @@ def main() -> int:
             continue
         sq = spo2_quality(night.spo2[t0:t1])
         st.update(spo2_valid_frac=round(sq["valid_frac"], 3), spo2_gap=sq["gap"])
-        sc, why = night_score(st)
+        sc, why = night_score(st, **gates)
         if sc is not None and not sq["ok"]:
             sc, why = None, f"spo2({sq['valid_frac']:.2f},gap={sq['gap']}s)"
-        rows.append({**st, "score": sc})
+        rows.append({**st, "score": sc, "ahi_nsrr": nsrr_ahi(sid)})
         print(
             f"[{k}/{len(test)}] {sid}: {(t1 - t0) / 3600:.1f} h cov="
             f"{st['n_cov']}/{st['n_linked']} frac={st['frac']:.2f} adv={st['n_adv']} "
@@ -490,6 +550,114 @@ def main() -> int:
             flush=True,
         )
         del night
+    return rows
+
+
+def build_band(
+    band: str,
+    story: bc.Story,
+    out_name: str,
+    *,
+    limit: int = 0,
+    make_default: bool = False,
+) -> int:
+    """Pick and build the best held-out night inside one severity band.
+
+    Same duty-cycle ranking as the headline night, restricted to the band, so the
+    clip can be described as "best of N moderate nights" instead of "a moderate
+    night we liked".
+    """
+    ki = bc.keep_idx_164()
+    fire = joblib.load(bc.MODEL_DIR / "xgb_fire_now.joblib")
+    active = joblib.load(bc.MODEL_DIR / "xgb_active.joblib")
+    lo, hi = SEVERITY_BANDS[band]
+    cands = band_nights(band)
+    if limit:
+        cands = cands[:limit]
+    if not cands:
+        print(f"no held-out nights with NSRR AHI in [{lo}, {hi})")
+        return 1
+    gates = BAND_GATES.get(band, {})
+    print(
+        f"screening {len(cands)} held-out {band} nights (AHI {lo}-{hi}), "
+        f"gates {gates or 'default'}",
+        flush=True,
+    )
+    rows = rank_nights(cands, fire, active, ki, **gates)
+    ranked = sorted((r for r in rows if r["score"] is not None), key=lambda r: -r["score"])
+    if not ranked:
+        print(f"no {band} night passed the duty-cycle gates")
+        return 1
+    for r in ranked[:10]:
+        print(
+            f"  cand {r['sid']} ahi={r['ahi_nsrr']:.1f} cov={r['coverage']:.2f} "
+            f"frac={r['frac']:.2f} adv={r['n_adv']} oa={r['n_oa']} "
+            f"spo2min={r['spo2_min']:.0f} score={r['score']:.2f}",
+            flush=True,
+        )
+    covs = np.array([r["coverage"] for r in rows])
+    fracs = np.array([r["frac"] for r in rows])
+    for rank, r in enumerate(ranked, 1):
+        note = (
+            f"MESA {r['sid']} is the top-ranked of {len(ranked)} held-out {band} "
+            f"nights (NSRR AHI {lo}-{hi}) that passed the duty-cycle gates, out of "
+            f"{len(rows)} scored in the band. Ranking is the same as the headline "
+            "night: coverage bought with as little jaw time as possible."
+        )
+        extra = {
+            "band": band,
+            "band_ahi_range": [lo, hi if hi != float("inf") else None],
+            "n_band_scored": len(rows),
+            "n_band_ranked": len(ranked),
+            "rank_in_band": rank,
+            "band_median_coverage": round(float(np.median(covs)), 3),
+            "band_median_fraction_advanced": round(float(np.median(fracs)), 3),
+        }
+        if build_subject(
+            r["sid"],
+            story,
+            out_name,
+            make_default=make_default,
+            cohort_extra=extra,
+            selection=note,
+        ) == 0:
+            return 0
+        print(f"  {r['sid']} failed the dense build; trying the next candidate")
+    print(f"every ranked {band} night failed the build")
+    return 1
+
+
+def main() -> int:
+    argv = sys.argv[1:]
+    story = (
+        STORY
+        if "--headline" in argv
+        else MODERATE_STORY
+        if "--moderate" in argv
+        else MILD_STORY
+    )
+    out_name = argv[argv.index("--id") + 1] if "--id" in argv else story.id
+    if "--sid" in argv:
+        sid = argv[argv.index("--sid") + 1]
+        return build_subject(sid, story, out_name, make_default="--default" in argv)
+    if "--moderate" in argv:
+        return build_band(
+            "moderate",
+            story,
+            out_name,
+            limit=int(argv[argv.index("--limit") + 1]) if "--limit" in argv else 0,
+            make_default="--default" in argv,
+        )
+    limit = int(argv[0]) if argv else 0
+    ki = bc.keep_idx_164()
+    fire = joblib.load(bc.MODEL_DIR / "xgb_fire_now.joblib")
+    active = joblib.load(bc.MODEL_DIR / "xgb_active.joblib")
+
+    test = held_out_nights()
+    if limit:
+        test = test[:limit]
+    print(f"ranking {len(test)} held-out nights", flush=True)
+    rows = rank_nights(test, fire, active, ki)
 
     if not rows:
         print("no nights ranked")

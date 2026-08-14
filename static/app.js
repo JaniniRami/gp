@@ -320,8 +320,41 @@ function breathRange(values, fs, wake) {
   const amp = medianOf(amps);
   if (!(amp > 0)) return robustRange(values);
   const span = amp / BREATH_LANE_FILL;
+  // `mid` is the no-flow level: measured inside obstructive apneas across the clip
+  // library, flow settles onto this baseline to within 0.01, and on a DC-offset
+  // channel it is nowhere near ADC zero (MESA 4053 breathes around +0.26).
   const mid = medianOf(mids);
-  return { lo: mid - span / 2, hi: mid + span / 2 };
+  return { lo: mid - span / 2, hi: mid + span / 2, mid };
+}
+
+// The nadir is a number this demo quotes, so it has to be inside the lane: take
+// the floor from the deepest valid sample anywhere in the clip. The ceiling comes
+// from sleep, where awake motion artifact cannot stretch the top of the lane.
+function spo2DisplayRange(p) {
+  let lo = Infinity;
+  let hi = -Infinity;
+  let hiSleep = -Infinity;
+  let nSleep = 0;
+  for (let i = 0; i < p.spo2.length; i++) {
+    const v = p.spo2[i];
+    if (!spo2Valid(v)) continue;
+    if (v < lo) lo = v;
+    if (v > hi) hi = v;
+    if (!(p.wake && p.wake[i])) {
+      nSleep += 1;
+      if (v > hiSleep) hiSleep = v;
+    }
+  }
+  if (!Number.isFinite(lo)) return { lo: 85, hi: 100 };
+  const top = nSleep >= 300 ? hiSleep : hi;
+  const pad = Math.max((top - lo) * 0.05, 0.5);
+  return { lo: Math.max(50, lo - pad), hi: Math.min(100, top + pad) };
+}
+
+// Cannula channels carry a DC offset, so the no-flow level is the breathing
+// baseline, not ADC zero. Fall back to zero for a range that has no baseline.
+function presZero() {
+  return Number.isFinite(NORM.pres.mid) ? NORM.pres.mid : 0;
 }
 
 function unitOf(value, range) {
@@ -856,8 +889,8 @@ function drawAir(tLeft, tRight, now) {
   drawGrid(ctx, w, h);
   drawEvents(ctx, h, tLeft, tRight, w, now);
   drawAdvanced(ctx, h, tLeft, tRight, w, now, "veil-note");
-  // Zero flow: an apnea is the trace collapsing onto this line.
-  drawValueAxis(ctx, w, h, NORM.pres, 0, "0");
+  // No flow: an apnea is the trace collapsing onto this line.
+  drawValueAxis(ctx, w, h, NORM.pres, presZero(), "no flow");
   drawUnitSeries(ctx, {
     values: pack.pres,
     fs: pack.fs_pres,
@@ -874,7 +907,7 @@ function drawAir(tLeft, tRight, now) {
     ctx,
     h,
     `breath scale ${NORM.pres.lo.toFixed(2)} .. ${NORM.pres.hi.toFixed(2)}   ` +
-      `0 = no flow   artifact clips at the edge`,
+      `no flow at ${presZero().toFixed(2)}   artifact clips at the edge`,
   );
   drawNow(ctx, h, tLeft, tRight, w, now);
 }
@@ -930,7 +963,7 @@ function drawOverlay(tLeft, tRight, now) {
     color: "rgba(15,23,42,0.28)",
     labelSide: "right",
   });
-  drawValueAxis(ctx, w, h, NORM.pres, 0, "Pres 0", {
+  drawValueAxis(ctx, w, h, NORM.pres, presZero(), "Pres no flow", {
     color: "rgba(2,132,199,0.35)",
     labelColor: "rgba(2,132,199,0.9)",
   });
@@ -1510,14 +1543,7 @@ async function loadClip(id) {
     $("speed").value = String(speed);
   }
   NORM.pres = breathRange(pack.pres, pack.fs_pres, pack.wake);
-  // Awake seconds also distort the SpO2 window (motion artifact, sensor off),
-  // so prefer sleep for the range and fall back when the clip has little sleep.
-  const spo2Sleep = pack.spo2.filter((v, i) => spo2Valid(v) && !(pack.wake && pack.wake[i]));
-  const spo2Clean = spo2Sleep.length >= 300 ? spo2Sleep : pack.spo2.filter(spo2Valid);
-  // Keep the true nadir inside the lane: a 1st-percentile floor clips it by up to
-  // 4% on the deep-desaturation clip, and the nadir is a number we quote.
-  const spo2Range = robustRange(spo2Clean.length ? spo2Clean : pack.spo2, 0.001, 1.0, 0.05);
-  NORM.spo2 = { lo: Math.max(50, spo2Range.lo), hi: Math.min(100, spo2Range.hi) };
+  NORM.spo2 = spo2DisplayRange(pack);
   applyPolicy(entry ? entry.policy : null);
   paintStory(entry);
   playing = false;
