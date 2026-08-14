@@ -335,6 +335,13 @@ input[type=range] { width: 108px; }
 .stage.mode-overlay {
   grid-template-rows: 20px minmax(0, 1fr) 24px 15px;
 }
+/* whole-night clip: the night map carries the story, so give it room */
+.stage.night.mode-stack {
+  grid-template-rows: 20px minmax(0, 1.15fr) minmax(0, 0.7fr) minmax(0, 0.7fr) 56px 15px;
+}
+.stage.night.mode-overlay {
+  grid-template-rows: 20px minmax(0, 1fr) 56px 15px;
+}
 .story {
   display: flex;
   align-items: baseline;

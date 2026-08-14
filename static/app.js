@@ -78,9 +78,16 @@ const $ = (id) => document.getElementById(id);
 
 function fmt(t) {
   t = Math.max(0, t);
-  const m = Math.floor(t / 60);
+  const h = Math.floor(t / 3600);
+  const m = Math.floor((t % 3600) / 60);
   const s = Math.floor(t % 60);
-  return `${String(m).padStart(2, "0")}:${String(s).padStart(2, "0")}`;
+  const mm = String(m).padStart(2, "0");
+  const ss = String(s).padStart(2, "0");
+  return h ? `${h}:${mm}:${ss}` : `${mm}:${ss}`;
+}
+
+function isNightClip() {
+  return !!pack && pack.duration_sec > 3600;
 }
 
 // First second inside the credit window [onset - lead, deadline] where the device
@@ -140,12 +147,14 @@ let pack = null;
 let clipIndex = []; // example library: one entry per presentation story
 let ctrl = new MadController();
 let sim = { advanced: [], actions: [], nAdvances: 0 };
+let simVersion = 0;
 let controllerProbs = [];
 let tNow = 0;
 let playing = false;
 let lastTs = 0;
 let winSec = 60;
 let speed = 8;
+let speedPinned = false; // once chosen by URL or user, stop auto-picking per clip
 let lastActionSent = -1;
 let layoutMode = "stack";
 
@@ -190,6 +199,12 @@ function robustRange(values, qLo = 0.005, qHi = 0.995, padFrac = 0.08) {
   return { lo: lo - pad, hi: hi + pad };
 }
 
+// Pulse-ox dropout in a whole night reads as 0 or a few percent; those samples
+// must not set the display range or be drawn as a real desaturation.
+function spo2Valid(v) {
+  return v >= 50 && v <= 100;
+}
+
 function unitOf(value, range) {
   const u = (value - range.lo) / (range.hi - range.lo);
   return Math.min(1, Math.max(0, u));
@@ -213,14 +228,22 @@ function drawUnitSeries(ctx, opts) {
   const i0 = Math.max(0, Math.floor(tLeft * fs));
   const i1 = Math.min(values.length, Math.floor(tEnd * fs) + 1);
   if (i1 <= i0) return;
+  const valid = opts.valid || (() => true);
   ctx.beginPath();
   ctx.strokeStyle = color;
   ctx.lineWidth = width;
+  let pen = false;
   for (let i = i0; i < i1; i++) {
+    if (!valid(values[i])) {
+      pen = false; // sensor dropout: leave a gap instead of a false floor
+      continue;
+    }
     const x = xOf(i / fs, tLeft, tRight, w);
     const y = yOfUnit(unitOf(values[i], range), h);
-    if (i === i0) ctx.moveTo(x, y);
-    else ctx.lineTo(x, y);
+    if (!pen) {
+      ctx.moveTo(x, y);
+      pen = true;
+    } else ctx.lineTo(x, y);
   }
   ctx.stroke();
 }
@@ -301,6 +324,9 @@ function paintEspLink() {
     detail = esp.note || "no reply";
   } else {
     detail = "waiting for reply";
+  }
+  if (esp.state !== "none" && speed > MAX_HW_SPEED) {
+    detail += ` | ${speed}x: hardware muted`;
   }
   rxText.textContent = detail;
   const txPart = esp.lastTx ? ` | tx ${esp.lastTx}` : "";
@@ -385,6 +411,7 @@ async function pollEspServer() {
 }
 
 function resim() {
+  simVersion += 1;
   const thr = Number($("thr").value) / 100;
   const oracle = $("policy-source").value === "oracle";
   ctrl.threshold = thr;
@@ -393,6 +420,7 @@ function resim() {
   ctrl.quietRetractSec = numberParam("p-quiet", 90);
   controllerProbs = oracle ? oracleFireNow() : pack.fire_now;
   sim = ctrl.simulate(controllerProbs, pack.wake);
+  buildCumulative();
   $("thr-lab").textContent = thr.toFixed(2);
   $("model-tag").textContent = oracle
     ? "Controller input - annotation oracle - active model"
@@ -408,21 +436,50 @@ function resim() {
   updateHud();
 }
 
+// Running totals so the HUD does not rescan a 10 h night on every frame.
+const cum = { advanced: new Int32Array(0), advances: new Int32Array(0) };
+
+function buildCumulative() {
+  const n = sim.advanced.length;
+  cum.advanced = new Int32Array(n);
+  cum.advances = new Int32Array(n);
+  let adv = 0;
+  let acts = 0;
+  for (let i = 0; i < n; i++) {
+    adv += sim.advanced[i] ? 1 : 0;
+    acts += sim.actions[i] === ADVANCE ? 1 : 0;
+    cum.advanced[i] = adv;
+    cum.advances[i] = acts;
+  }
+}
+
 function coverageNow() {
   const evs = policyEvents(pack.events).filter((e) => e.start <= tNow + 1);
   const linked = evs.filter((e) => e.arousal_linked);
   const lag = $("policy-source").value === "oracle" ? numberParam("p-lag", 10) : 10;
   const lead = $("policy-source").value === "oracle" ? numberParam("p-lead", 30) : 30;
   let cov = 0;
+  let inherited = 0;
   const leads = [];
   for (const e of linked) {
     const hit = coverHit(e, sim.advanced, lag, lead);
     if (hit == null) continue;
     cov += 1;
     const start = runStartAt(sim.advanced, hit);
-    leads.push(e.start - (start + ctrl.advanceSec));
+    const leadSec = e.start - (start + ctrl.advanceSec);
+    // Only a run that started for this event counts as lead; minutes-long holds
+    // covering a later event are inherited, not prediction.
+    const fresh = e.start - Math.max(lead, 60) - ctrl.advanceSec;
+    if (leadSec >= 0 && start >= fresh) leads.push(leadSec);
+    else inherited += 1;
   }
-  return { linked: linked.length, cov, leadMedian: median(leads), nLead: leads.length };
+  return {
+    linked: linked.length,
+    cov,
+    leadMedian: median(leads),
+    nLead: leads.length,
+    inherited,
+  };
 }
 
 function updateHud() {
@@ -441,24 +498,26 @@ function updateHud() {
   $("pill-mad").classList.toggle("adv", pos === ADVANCED || pos === ADVANCING);
   const p = controllerProbs[i] ?? 0;
   $("m-p").textContent = p.toFixed(2);
-  const advSoFar = sim.actions
-    .slice(0, i + 1)
-    .reduce((n, a) => n + (a === ADVANCE ? 1 : 0), 0);
+  const advSoFar = cum.advances[i] ?? 0;
   $("m-adv").textContent = `${advSoFar} / ${sim.nAdvances}`;
-  const frac = sim.advanced.length
-    ? sim.advanced.slice(0, i + 1).reduce((a, b) => a + b, 0) / (i + 1)
-    : 0;
-  const fracClip = sim.advanced.length
-    ? sim.advanced.reduce((a, b) => a + b, 0) / sim.advanced.length
-    : 0;
+  const n = sim.advanced.length;
+  const frac = n ? cum.advanced[i] / (i + 1) : 0;
+  const fracClip = n ? cum.advanced[n - 1] / n : 0;
   $("m-frac").textContent =
     `${Math.round(frac * 100)}% (clip ${Math.round(fracClip * 100)}%)`;
   const c = coverageNow();
   $("m-cov").textContent = `${c.cov} / ${c.linked}`;
   $("m-lead").textContent =
     c.leadMedian == null
-      ? "--"
-      : `${c.leadMedian >= 0 ? "+" : ""}${c.leadMedian.toFixed(0)} s (n=${c.nLead})`;
+      ? c.inherited
+        ? `held over (n=${c.inherited})`
+        : "--"
+      : `${c.leadMedian >= 0 ? "+" : ""}${c.leadMedian.toFixed(0)} s (n=${c.nLead}` +
+        `${c.inherited ? `, ${c.inherited} held` : ""})`;
+  $("m-lead").title =
+    "Median time the jaw was already fully forward before onset, counting only " +
+    "advances started for that event; events covered by an earlier hold are " +
+    "reported as held over.";
   $("m-duty").textContent = `${Math.round((1 - fracClip) * 100)}% less jaw time`;
   $("mad-sub").textContent =
     pos === ADVANCED
@@ -606,6 +665,7 @@ function drawSpo2(tLeft, tRight, now) {
     range: NORM.spo2,
     color: "#e11d48",
     width: 2,
+    valid: spo2Valid,
     tLeft,
     tRight,
     tMax: now,
@@ -664,6 +724,7 @@ function drawOverlay(tLeft, tRight, now) {
     range: NORM.spo2,
     color: "#e11d48",
     width: 2,
+    valid: spo2Valid,
     tLeft,
     tRight,
     tMax: now,
@@ -755,34 +816,133 @@ function drawModel(tLeft, tRight, now) {
   drawNow(ctx, h, tLeft, tRight, w, now);
 }
 
+// The map only changes when the simulation or the canvas does, so cache it: a
+// whole night is ~32k seconds and redrawing it every frame is wasted work.
+const miniCache = { key: "", canvas: null, dpr: 1 };
+
 function drawMini(now) {
   const { ctx, w, h } = setupCanvas($("c-mini"));
   ctx.clearRect(0, 0, w, h);
-  const n = pack.duration_sec;
-  for (const e of pack.events) {
-    ctx.fillStyle = e.kind === "obstructive" ? "#d97706" : "#9333ea";
-    ctx.fillRect((e.start / n) * w, 4, Math.max(2, ((e.end - e.start) / n) * w), h - 8);
+  const key = `${pack.meta.subject_id}|${pack.duration_sec}|${simVersion}|${Math.round(w)}x${Math.round(h)}`;
+  if (miniCache.key !== key) {
+    miniCache.canvas = paintMiniBase(w, h);
+    miniCache.key = key;
   }
-  for (let t = 0; t < sim.advanced.length; t++) {
-    if (!sim.advanced[t]) continue;
-    ctx.fillStyle = "rgba(148,163,184,0.4)";
-    ctx.fillRect((t / n) * w, 0, w / n + 0.5, h);
+  // Only the played part of the night exists yet, here as in the traces.
+  const xNow = Math.max(0, Math.min(w, (now / pack.duration_sec) * w));
+  const d = miniCache.dpr;
+  if (xNow > 0) {
+    ctx.drawImage(
+      miniCache.canvas,
+      0,
+      0,
+      xNow * d,
+      h * d,
+      0,
+      0,
+      xNow,
+      h,
+    );
   }
-  for (const t of coldStartTimes()) {
-    const x = (t / n) * w;
-    ctx.fillStyle = "#0284c7";
-    ctx.beginPath();
-    ctx.moveTo(x - 4, 0);
-    ctx.lineTo(x + 4, 0);
-    ctx.lineTo(x, 7);
-    ctx.closePath();
-    ctx.fill();
-  }
-  const xNow = (now / n) * w;
-  ctx.fillStyle = "rgba(248,250,252,0.72)"; // clip map: dim the part not played yet
+  ctx.fillStyle = "#ffffff";
   ctx.fillRect(xNow, 0, Math.max(0, w - xNow), h);
+  if (isNightClip()) drawHourTicks(ctx, w, h, xNow); // keep the hours readable ahead
   ctx.fillStyle = "#0f172a";
   ctx.fillRect(xNow, 0, 2, h);
+}
+
+const HOUR_LABEL_Y = 11;
+
+function drawHourTicks(ctx, w, h, fromX = 0) {
+  const n = pack.duration_sec;
+  ctx.strokeStyle = "rgba(15,23,42,0.18)";
+  ctx.fillStyle = "rgba(100,116,139,0.95)";
+  ctx.font = '9px "IBM Plex Mono", monospace';
+  ctx.lineWidth = 1;
+  for (let t = 3600; t < n; t += 3600) {
+    const x = (t / n) * w;
+    if (x < fromX) continue;
+    ctx.beginPath();
+    ctx.moveTo(x, HOUR_LABEL_Y);
+    ctx.lineTo(x, h);
+    ctx.stroke();
+    ctx.fillText(`${t / 3600} h`, x + 3, HOUR_LABEL_Y - 2);
+  }
+}
+
+function paintMiniBase(w, h) {
+  const dpr = Math.max(1, window.devicePixelRatio || 1);
+  miniCache.dpr = dpr;
+  const off = document.createElement("canvas");
+  off.width = Math.max(1, Math.floor(w * dpr));
+  off.height = Math.max(1, Math.floor(h * dpr));
+  const ctx = off.getContext("2d");
+  ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
+  const n = pack.duration_sec;
+  const night = isNightClip();
+  const xAt = (t) => (t / n) * w;
+
+  if (!night) {
+    for (const e of pack.events) {
+      ctx.fillStyle = e.kind === "obstructive" ? "#d97706" : "#9333ea";
+      ctx.fillRect(xAt(e.start), 4, Math.max(1.5, xAt(e.end - e.start)), h - 8);
+    }
+    ctx.fillStyle = "rgba(100,116,139,0.45)";
+    for (const [a, b] of advanceRuns(sim.advanced)) {
+      ctx.fillRect(xAt(a), 0, Math.max(1.5, xAt(b - a)), h);
+    }
+    for (const t of coldStartTimes()) {
+      const x = xAt(t);
+      ctx.fillStyle = "#0284c7";
+      ctx.beginPath();
+      ctx.moveTo(x - 4, 0);
+      ctx.lineTo(x + 4, 0);
+      ctx.lineTo(x, 7);
+      ctx.closePath();
+      ctx.fill();
+    }
+    return off;
+  }
+
+  // Night map: hours across, events on the upper lane, jaw state on the lower
+  // lane, so a whole night reads as "events above, device below".
+  const hourY = HOUR_LABEL_Y;
+  const evTop = hourY + 1;
+  const evH = Math.max(6, h * 0.42 - evTop + hourY);
+  const advTop = evTop + evH + 3;
+  const advH = Math.max(6, h - advTop - 2);
+
+  ctx.fillStyle = "rgba(148,163,184,0.16)"; // scored wake: the controller is gated
+  for (const [a, b] of advanceRuns(pack.wake)) {
+    ctx.fillRect(xAt(a), hourY, Math.max(1, xAt(b - a)), h - hourY);
+  }
+  drawHourTicks(ctx, w, h);
+  for (const e of pack.events) {
+    ctx.fillStyle = e.kind === "obstructive" ? "#d97706" : "#9333ea";
+    ctx.fillRect(xAt(e.start), evTop, Math.max(1.2, xAt(e.end - e.start)), evH);
+  }
+  ctx.fillStyle = "rgba(71,85,105,0.8)";
+  for (const [a, b] of advanceRuns(sim.advanced)) {
+    ctx.fillRect(xAt(a), advTop, Math.max(1.2, xAt(b - a)), advH);
+  }
+  ctx.fillStyle = "rgba(71,85,105,0.55)";
+  ctx.fillText("jaw", 4, advTop + advH - 2);
+  return off;
+}
+
+// Contiguous advanced runs as [start, end) second pairs.
+function advanceRuns(mask) {
+  const runs = [];
+  let run = null;
+  for (let t = 0; t <= mask.length; t++) {
+    const on = t < mask.length && mask[t];
+    if (on && run == null) run = t;
+    else if (!on && run != null) {
+      runs.push([run, t]);
+      run = null;
+    }
+  }
+  return runs;
 }
 
 function render() {
@@ -800,9 +960,17 @@ function render() {
   updateHud();
 }
 
+// Above this the jaw cannot physically track the replay, so the board is left
+// alone and the screen keeps running.
+const MAX_HW_SPEED = 16;
+
 async function maybeActuate() {
   const i = Math.min(sim.actions.length - 1, Math.max(0, Math.floor(tNow)));
   if (i === lastActionSent) return;
+  if (speed > MAX_HW_SPEED) {
+    lastActionSent = i;
+    return;
+  }
   // fire on the first second we cross an ADVANCE/RETRACT
   for (let k = lastActionSent + 1; k <= i; k++) {
     if (sim.actions[k] === ADVANCE) await sendEsp("ADVANCE");
@@ -857,6 +1025,7 @@ function seekBefore(start) {
 // Opening frame: land ~45 s before the first advance so the audience sees the jaw
 // move; fall back to the first cold start with enough history behind it.
 function burstT() {
+  if (isNightClip()) return 0; // a whole night is watched from lights out
   const firstAdvance = sim.actions.findIndex((a, i) => a === ADVANCE && i >= 45);
   if (firstAdvance >= 0) return Math.max(0, firstAdvance - 45);
   const cold = coldStartTimes();
@@ -998,6 +1167,10 @@ function applyPolicy(policy) {
   updatePolicyUi();
 }
 
+function applyStageClass() {
+  $("stage").className = `stage mode-${layoutMode}${isNightClip() ? " night" : ""}`;
+}
+
 function paintStory(entry) {
   if (!entry) {
     $("story-title").textContent = "MESA held-out clip";
@@ -1009,6 +1182,9 @@ function paintStory(entry) {
   $("story-title").textContent = entry.title;
   $("story-watch").textContent = entry.watch || "";
   const bits = [];
+  if (entry.duration_sec > 3600) {
+    bits.push(`${(entry.duration_sec / 3600).toFixed(1)} h night`);
+  }
   if (m.n_covered != null) bits.push(`${m.n_covered}/${m.n_linked} covered`);
   if (m.advances != null) bits.push(`${m.advances} adv`);
   if (m.fraction_advanced != null) {
@@ -1051,9 +1227,16 @@ async function loadClip(id) {
   pack = loaded;
   if (entry) $("clip").value = entry.id;
   $("pill-sub").textContent = `MESA ${pack.meta.subject_id}`;
+  applyStageClass();
+  if (!speedPinned) {
+    // 8x is right for an 18 min clip; a whole night needs 60x to watch end to end
+    speed = isNightClip() ? 60 : 8;
+    $("speed").value = String(speed);
+  }
   NORM.pres = robustRange(pack.pres);
-  const spo2Range = robustRange(pack.spo2, 0.01, 1.0, 0.05);
-  NORM.spo2 = { lo: spo2Range.lo, hi: Math.min(100, spo2Range.hi) };
+  const spo2Clean = pack.spo2.filter(spo2Valid);
+  const spo2Range = robustRange(spo2Clean.length ? spo2Clean : pack.spo2, 0.01, 1.0, 0.05);
+  NORM.spo2 = { lo: Math.max(50, spo2Range.lo), hi: Math.min(100, spo2Range.hi) };
   applyPolicy(entry ? entry.policy : null);
   paintStory(entry);
   playing = false;
@@ -1095,15 +1278,15 @@ async function boot() {
     (clipIndex[0] && clipIndex[0].id) ||
     null;
   const wantedSpeed = Number(params.get("speed"));
-  if ([1, 2, 4, 8, 16].includes(wantedSpeed)) {
+  if ([1, 2, 4, 8, 16, 30, 60, 120, 240].includes(wantedSpeed)) {
     speed = wantedSpeed;
+    speedPinned = true;
     $("speed").value = String(wantedSpeed);
   }
   const wantedLayout = params.get("layout");
   if (wantedLayout === "overlay" || wantedLayout === "stack") {
     layoutMode = wantedLayout;
     $("layout").value = wantedLayout;
-    $("stage").className = `stage mode-${wantedLayout}`;
   }
   await loadClip(startId);
   const wantedT = Number(params.get("t")); // deep link to a moment in the clip
@@ -1140,10 +1323,12 @@ async function boot() {
   $("clip").onchange = (e) => loadClip(e.target.value);
   $("speed").onchange = (e) => {
     speed = Number(e.target.value);
+    speedPinned = true;
+    paintEspLink();
   };
   $("layout").onchange = (e) => {
     layoutMode = e.target.value;
-    $("stage").className = `stage mode-${layoutMode}`;
+    applyStageClass();
     $("veil-note").style.display = "none";
     $("veil-note-overlay").style.display = "none";
     render();

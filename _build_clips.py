@@ -872,8 +872,16 @@ def main() -> int:
         print("no clips built")
         return 1
     CLIP_DIR.mkdir(parents=True, exist_ok=True)
-    (CLIP_DIR / "index.json").write_text(
-        json.dumps({"default": index[0]["id"], "clips": index}, indent=2) + "\n"
+    index_path = CLIP_DIR / "index.json"
+    # keep entries this script does not own (e.g. the whole-night clip)
+    story_ids = {s.id for s in STORIES}
+    kept: list[dict] = []
+    if index_path.is_file():
+        old = json.loads(index_path.read_text())
+        kept = [c for c in old.get("clips", []) if c["id"] not in story_ids]
+    clips = kept + index
+    index_path.write_text(
+        json.dumps({"default": clips[0]["id"], "clips": clips}, indent=2) + "\n"
     )
     shutil.copyfile(CLIP_DIR / f"{index[0]['pack_id']}.json", OUT / "pack.json")
     print(f"wrote {len(index)} clips to {CLIP_DIR}")

@@ -184,7 +184,12 @@ def main() -> int:
         clips = json.loads(CLIP_INDEX.read_text(encoding="utf-8")).get("clips", [])
         print(f"clip library: {len(clips)} examples", flush=True)
         for c in clips:
-            print(f"  - {c['id']:15s} MESA {c.get('subject_id')}  {c.get('title')}", flush=True)
+            dur = c.get("duration_sec") or 0
+            span = f"{dur / 3600:.1f} h" if dur >= 3600 else f"{dur / 60:.0f} min"
+            print(
+                f"  - {c['id']:15s} MESA {c.get('subject_id')}  {span:>7s}  {c.get('title')}",
+                flush=True,
+            )
     else:
         print("clip library: none (data/clips/index.json missing)", file=sys.stderr)
 

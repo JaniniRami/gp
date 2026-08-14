@@ -15,17 +15,49 @@ Nothing to the right of the cursor is drawn: signals, scored events, and arousal
 | `static/` | Live-replay website |
 | `server.py` | Local server (opens the browser, optional ESP serial) |
 | `data/clips/*.json` | Example clip library (waveforms, events, model scores) |
+| `data/clips/full_night.json` | Whole-night replay of the best-performing held-out night |
 | `data/clips/*.edf` | Matching 18 min excerpts (Pres 32 Hz + SpO2 1 Hz) |
 | `data/clips/index.json` | Story text, recommended policy and headline metrics per clip |
-| `data/pack.json` | Copy of the default clip (single-clip fallback path) |
+| `data/pack.json` | Copy of the flagship 18 min clip (fallback when no clip index is readable) |
 | `models/xgb_fire_now.joblib` | Deployable `fire_now` XGB (164 features, test AUROC 0.85) |
 | `models/xgb_active.joblib` | Active-event head (shown as the cyan model trace) |
 | `firmware/drv8871_mad_control/` | ESP32 + DRV8871 sketch (IN1=27, IN2=26) |
 
+## Whole-night replay (default clip)
+
+The demo opens on **Whole night, best held-out subject**: MESA **2934**, a 7.7 h recording
+played end to end, so you watch the controller advance and retract all night instead of a
+single window.
+
+| Night | Arousal-linked covered | Advances | Night advanced | SpO2 nadir |
+|---|---|---|---|---|
+| MESA 2934, 7.7 h | 102/104 (98%) | 34 | 40% (fixed MAD = 100%) | 82% |
+
+Severe OSA night: 119 obstructive apneas plus hypopneas, 104 of them arousal-linked, and
+the jaw is home for 60% of it.
+
+At **60x** the night takes about 8 min of presentation time; 120x and 240x are there if
+you only want to show the pattern. Above 16x the ESP is deliberately **not driven** (the
+motor cannot track a sped-up night), and the link chip says so.
+
+The night map under the traces is the whole recording at a glance: hour ticks, scored
+events on the upper lane (amber OA, purple hypopnea/Unsure), the jaw state on the lower
+lane, wake in light gray, and the cursor sweeping left to right. The pattern to point at
+is short gray blocks under clusters and long clean stretches with the jaw home.
+
+This night was picked by `_build_night.py`, which scores **every** held-out night end to
+end with the same controller and keeps the best one: coverage >= 85%, at most 40% of the
+night advanced, at least 25 arousal-linked events and 3 obstructive apneas, valid SpO2 all
+night, mostly asleep, then ranked on coverage, jaw time, event density and desaturation
+depth. It is the best of 168 scored nights (7 passed the gates), not a typical night: the
+cohort median at this threshold is 89% coverage at 40% of the night advanced, and both
+numbers are stored in the clip's `meta.cohort`.
+
 ## Example library
 
-Pick a clip from the **clip** menu in the top bar. Each one is an 18 min window from a
-different held-out MESA subject, chosen automatically because it makes one specific point.
+Pick a clip from the **clip** menu in the top bar. Besides the whole night above, each
+one is an 18 min window from a different held-out MESA subject, chosen automatically
+because it makes one specific point.
 All numbers below are at threshold 0.55, geometry **A = 10 s**, earliest lead **30 s**,
 targets OA + hypopnea + Unsure, coverage counted over **arousal-linked** events only.
 
@@ -58,7 +90,12 @@ python server.py
 
 The site opens at [http://127.0.0.1:8765](http://127.0.0.1:8765).
 
-Presenter path: **Next cold start** -> **Play** at 8x -> watch `fire_now` cross the threshold -> MAD ADVANCING (10 s) -> gray HOLD through the cluster -> retract when quiet.
+Presenter path for the whole night: **Play** at 60x and let the night map fill in; stop at
+any cluster, drop to 8x and talk through one advance.
+
+Presenter path for a story clip: **Next cold start** -> **Play** at 8x -> watch `fire_now`
+cross the threshold -> MAD ADVANCING (10 s) -> gray HOLD through the cluster -> retract
+when quiet.
 
 ## Controls (top bar)
 
@@ -68,10 +105,10 @@ Everything lives in the two rows at the top; the page never scrolls.
 |---|---|
 | **clip** | Switches example; loads that clip and its recommended controller input |
 | **Play / Pause** | Runs the replay at the selected speed |
-| **speed** | 1x live up to 16x |
+| **speed** | 1x live up to 240x (60x plays a whole night in about 9 min) |
 | **Next cold start** | Seeks to **60 s before the next cluster-first event** and cycles through all of them (wraps at the end) |
 | **Next event** | Same 60 s pre-roll, but for every target event including mid-burst ones |
-| **Reset** | Back to the opening frame (45 s before the clip's first advance) |
+| **Reset** | Back to the opening frame (lights out for the night clip, 45 s before the first advance for a story clip) |
 | **Stacked lanes / Normalized overlay** | Trace layout |
 | **window** | Visible time span, 30-120 s |
 | **threshold** | `fire_now` decision threshold; the controller re-simulates instantly |
@@ -82,11 +119,15 @@ and cold starts are marked with cyan triangles in the trace lanes and on the cli
 The line under the traces names the clip and the point it makes, with that clip's
 headline numbers on the right (`7/8 covered | 2 adv | 44% vs 100% static`). The
 **This clip** card tracks the same quantities live as the replay advances, including
-how far ahead of each onset the jaw was already in place.
+how far ahead of each onset the jaw was already in place. That lead counts only
+advances started for the event in question (within 60 s of onset); events that were
+already covered by an earlier hold are reported as `held`, so hold-through is never
+sold as prediction.
 
 URL parameters for a preset opening state: `/?clip=burst_hold`, `/?t=660` (jump to a
 second in the clip), `/?layout=overlay`, `/?play=1`, `/?speed=16`. They combine, so
-`/?clip=oa_lead&t=430&speed=4` opens exactly on the advance you want to talk about.
+`/?clip=oa_lead&t=430&speed=4` opens exactly on the advance you want to talk about, and
+`/?clip=full_night&play=1&speed=60` starts the whole night running by itself.
 
 If the **clip** menu is empty or disabled ("library not found"), the page is talking to
 an old server process. Stop it, `git pull`, run `python server.py` again, and hard-reload
@@ -102,7 +143,11 @@ legend, policy card, control rows) stays on one screen with no scrolling on a
 Every trace is normalized once per clip using robust percentiles (0.5-99.5 for
 nasal pressure, SpO2 capped at 100), so the vertical scale never jumps while
 the trace scrolls. The real range in use is printed in the bottom-left of each
-lane.
+lane. Pulse-ox dropout (SpO2 below 50%) is left as a gap rather than drawn as a
+desaturation, and never sets the range.
+
+Nasal pressure is stored at 32 Hz in the 18 min clips and at 8 Hz in the whole-night
+clip (still well above breathing rate) to keep the night to about 3 MB.
 
 - **Stacked lanes** (default): Pres, SpO2, and model heads in their own lanes.
 - **Normalized overlay**: all four series on one shared 0-1 axis in a single
@@ -169,6 +214,11 @@ Server endpoints used by the UI: `GET /api/esp/status` (link state, last reply, 
 
 The website uses **precomputed 1 Hz scores** from those weights so the M4 stays smooth. Threshold can still be moved live; the JS control loop re-runs instantly.
 
+Rebuilding the whole-night clip (needs the MESA caches): `python _build_night.py`. It
+ranks every held-out night, prints the top candidates and the cohort medians, and writes
+`data/clips/full_night.json` plus a merged `index.json`. Run `_build_clips.py` first if you
+are rebuilding both; each script preserves the other's entries.
+
 Rebuilding the library (needs the MESA caches, not in this repo): `python _build_clips.py`
 scans every held-out night, scores each 18 min window with the same controller the browser
 runs, and keeps the best window per story in `data/clips/`. Windows are selected on the
@@ -181,4 +231,4 @@ earlier hold are reported separately, so "caught before onset" never means hold-
 
 ## Data notice
 
-The files in `data/clips/` are short derived excerpts of [MESA Sleep](https://sleepdata.org/datasets/mesa) (NSRR). Use only under your NSRR data-use agreement. Do not treat these public demo clips as a license to redistribute full nights.
+The files in `data/clips/` are derived excerpts of [MESA Sleep](https://sleepdata.org/datasets/mesa) (NSRR): 18 min windows plus one downsampled whole night (nasal pressure at 8 Hz, SpO2 at 1 Hz, scored events). Use only under your NSRR data-use agreement, and do not treat these demo files as a license to redistribute MESA recordings.

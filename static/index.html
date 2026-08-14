@@ -37,12 +37,16 @@
 
       <div class="bar bar-controls">
         <button class="primary" id="btn-play">Play</button>
-        <select id="speed" title="Replay speed">
+        <select id="speed" title="Replay speed (60x plays a whole night in about 8 min)">
           <option value="1">1x live</option>
           <option value="2">2x</option>
           <option value="4">4x</option>
           <option value="8" selected>8x</option>
           <option value="16">16x</option>
+          <option value="30">30x</option>
+          <option value="60">60x</option>
+          <option value="120">120x</option>
+          <option value="240">240x</option>
         </select>
         <button id="btn-cold" title="Seek to 60 s before the next cluster-first (cold start) event">Next cold start</button>
         <button id="btn-event" title="Seek to 60 s before the next target event">Next event</button>
