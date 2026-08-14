@@ -129,9 +129,22 @@ let lastTs = 0;
 let winSec = 60;
 let speed = 8;
 let lastActionSent = -1;
-let espWriter = null;
-let espFallback = false;
 let layoutMode = "stack";
+
+const PRE_ROLL_SEC = 60; // seek this far before the event we jump to
+
+// ESP link state. "open" = serial port open, "live" = the board answered us.
+const esp = {
+  mode: "none", // none | webserial | server
+  state: "none", // none | open | live | err
+  port: null,
+  writer: null,
+  lastTx: null,
+  lastRx: null,
+  lastRxAtMs: 0,
+  rxCount: 0,
+  note: "",
+};
 
 // Robust per-signal display ranges, computed once from the whole clip so the
 // vertical scale never jumps while the trace scrolls.
@@ -177,8 +190,10 @@ function drawScaleHint(ctx, h, text) {
 
 function drawUnitSeries(ctx, opts) {
   const { values, fs, range, color, width, tLeft, tRight, w, h } = opts;
+  // Live monitor: never draw past the cursor, the future is not known yet.
+  const tEnd = Math.min(tRight, opts.tMax ?? tRight);
   const i0 = Math.max(0, Math.floor(tLeft * fs));
-  const i1 = Math.min(values.length, Math.ceil(tRight * fs) + 1);
+  const i1 = Math.min(values.length, Math.floor(tEnd * fs) + 1);
   if (i1 <= i0) return;
   ctx.beginPath();
   ctx.strokeStyle = color;
@@ -226,18 +241,128 @@ function policyEvents(events) {
   return events.filter((event) => kinds.has(event.kind));
 }
 
+function setEspState(state, note = "") {
+  esp.state = state;
+  esp.note = note;
+  paintEspLink();
+}
+
+function noteEspRx(line) {
+  esp.lastRx = line;
+  esp.lastRxAtMs = Date.now();
+  esp.rxCount += 1;
+  if (esp.state !== "live") setEspState("live");
+  else paintEspLink();
+}
+
+function paintEspLink() {
+  const chip = $("esp-chip");
+  const dotText = $("esp-text");
+  const rxText = $("esp-rx");
+  chip.classList.remove("live", "open", "err");
+  const via = esp.mode === "webserial" ? "Web Serial" : esp.mode === "server" ? "server" : "";
+  if (esp.state === "live") {
+    chip.classList.add("live");
+    dotText.textContent = `ESP linked (${via})`;
+  } else if (esp.state === "open") {
+    chip.classList.add("open");
+    dotText.textContent = `ESP port open (${via})`;
+  } else if (esp.state === "err") {
+    chip.classList.add("err");
+    dotText.textContent = "ESP link error";
+  } else {
+    dotText.textContent = "ESP not connected";
+  }
+  let detail;
+  if (esp.state === "none") {
+    detail = "click Connect ESP";
+  } else if (esp.lastRx) {
+    const age = Math.max(0, Math.round((Date.now() - esp.lastRxAtMs) / 1000));
+    detail = `rx "${esp.lastRx}" ${age}s ago`;
+  } else if (esp.state === "err") {
+    detail = esp.note || "no reply";
+  } else {
+    detail = "waiting for reply";
+  }
+  rxText.textContent = detail;
+  const txPart = esp.lastTx ? ` | tx ${esp.lastTx}` : "";
+  $("esp-last").textContent =
+    esp.state === "none" ? "ESP: no link" : `ESP: ${detail}${txPart}`;
+  const noLink = esp.mode === "none";
+  for (const id of ["btn-adv", "btn-ret", "btn-stop", "btn-esp-test"]) {
+    $(id).disabled = noLink;
+  }
+}
+
 async function sendEsp(cmd) {
-  if (espWriter) {
-    const enc = new TextEncoder();
-    await espWriter.write(enc.encode(cmd + "\n"));
+  if (esp.mode === "webserial" && esp.writer) {
+    try {
+      esp.lastTx = cmd;
+      await esp.writer.write(new TextEncoder().encode(cmd + "\n"));
+      paintEspLink();
+    } catch (e) {
+      setEspState("err", String(e.message || e));
+    }
     return;
   }
-  if (espFallback) {
-    await fetch("/api/esp/cmd", {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ cmd }),
-    }).catch(() => {});
+  if (esp.mode === "server") {
+    try {
+      esp.lastTx = cmd;
+      const r = await fetch("/api/esp/cmd", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ cmd }),
+      });
+      if (!r.ok) setEspState("err", `server ${r.status}`);
+      else paintEspLink();
+    } catch (e) {
+      setEspState("err", String(e.message || e));
+    }
+  }
+}
+
+async function readEspLoop(port) {
+  try {
+    const decoder = new TextDecoderStream();
+    port.readable.pipeTo(decoder.writable).catch(() => {});
+    const reader = decoder.readable.getReader();
+    let buf = "";
+    for (;;) {
+      const { value, done } = await reader.read();
+      if (done) break;
+      buf += value;
+      let nl;
+      while ((nl = buf.indexOf("\n")) >= 0) {
+        const line = buf.slice(0, nl).trim();
+        buf = buf.slice(nl + 1);
+        if (line) noteEspRx(line);
+      }
+      if (buf.length > 400) buf = buf.slice(-200);
+    }
+    if (esp.mode === "webserial") setEspState("err", "serial stream closed");
+  } catch (e) {
+    setEspState("err", String(e.message || e));
+  }
+}
+
+async function pollEspServer() {
+  if (esp.mode !== "server") return;
+  try {
+    const st = await fetch("/api/esp/status").then((r) => r.json());
+    if (!st.linked) {
+      setEspState("err", "serial closed on server");
+      return;
+    }
+    if (st.last_rx && st.last_rx !== esp.lastRx) {
+      esp.lastRx = st.last_rx;
+      esp.rxCount = st.rx_count || esp.rxCount + 1;
+      esp.lastRxAtMs = Date.now() - Math.round((st.last_rx_age_sec || 0) * 1000);
+      setEspState("live");
+    } else {
+      paintEspLink();
+    }
+  } catch {
+    setEspState("err", "server unreachable");
   }
 }
 
@@ -257,7 +382,7 @@ function resim() {
     : "Model - fire_now - active";
   $("pill-geo").textContent = oracle
     ? `ORACLE | A=${numberParam("p-lag", 10)}s | lead=${numberParam("p-lead", 30)}s`
-    : "MODEL | A=10s | lead=30s | no scored wake";
+    : "MODEL | A=10s | lead=30s | no wake";
   $("pill-geo").classList.toggle("adv", oracle);
   lastActionSent = -1;
   updateHud();
@@ -294,7 +419,11 @@ function updateHud() {
   const frac = sim.advanced.length
     ? sim.advanced.slice(0, i + 1).reduce((a, b) => a + b, 0) / (i + 1)
     : 0;
-  $("m-frac").textContent = `${Math.round(frac * 100)}%`;
+  const fracClip = sim.advanced.length
+    ? sim.advanced.reduce((a, b) => a + b, 0) / sim.advanced.length
+    : 0;
+  $("m-frac").textContent =
+    `${Math.round(frac * 100)}% (clip ${Math.round(fracClip * 100)}%)`;
   const c = coverageNow();
   $("m-cov").textContent = `${c.cov} / ${c.linked}`;
   $("mad-sub").textContent =
@@ -314,6 +443,7 @@ function updateHud() {
   $("clock").textContent = `${fmt(tNow)} / ${fmt(pack.duration_sec)}`;
   $("now-air").textContent = `t = ${fmt(tNow)}`;
   $("now-overlay").textContent = `t = ${fmt(tNow)}`;
+  updateSeekHint();
 }
 
 function advLabel(pos) {
@@ -327,21 +457,31 @@ function xOf(t, tLeft, tRight, w) {
   return ((t - tLeft) / (tRight - tLeft)) * w;
 }
 
-function drawEvents(ctx, h, tLeft, tRight, w) {
+function drawEvents(ctx, h, tLeft, tRight, w, now) {
+  // Scored annotations are revealed as the cursor passes them, never ahead of it.
   for (const e of pack.events) {
-    if (e.end < tLeft || e.start > tRight) continue;
+    if (e.end < tLeft || e.start > Math.min(tRight, now)) continue;
     const x0 = xOf(e.start, tLeft, tRight, w);
-    const x1 = xOf(e.end, tLeft, tRight, w);
+    const x1 = xOf(Math.min(e.end, now), tLeft, tRight, w);
     ctx.fillStyle = e.kind === "obstructive" ? "rgba(255,176,32,0.28)" : "rgba(192,132,252,0.28)";
     ctx.fillRect(x0, 0, Math.max(2, x1 - x0), h);
     ctx.fillStyle = e.kind === "obstructive" ? "#ffb020" : "#c084fc";
     ctx.font = "11px IBM Plex Sans";
     ctx.fillText(e.kind === "obstructive" ? "OA" : "HYP", x0 + 4, 16);
+    if (e.is_cluster_first) {
+      ctx.fillStyle = "#38bdf8";
+      ctx.beginPath();
+      ctx.moveTo(x0 - 5, h);
+      ctx.lineTo(x0 + 5, h);
+      ctx.lineTo(x0, h - 9);
+      ctx.closePath();
+      ctx.fill();
+    }
   }
   ctx.strokeStyle = "#ffe08a";
   ctx.lineWidth = 2;
   for (const a of pack.arousals) {
-    if (a.start < tLeft || a.start > tRight) continue;
+    if (a.start < tLeft || a.start > Math.min(tRight, now)) continue;
     const x = xOf(a.start, tLeft, tRight, w);
     ctx.beginPath();
     ctx.moveTo(x, 0);
@@ -402,7 +542,7 @@ function drawAir(tLeft, tRight, now) {
   const { ctx, w, h } = setupCanvas($("c-air"));
   ctx.clearRect(0, 0, w, h);
   drawGrid(ctx, w, h);
-  drawEvents(ctx, h, tLeft, tRight, w);
+  drawEvents(ctx, h, tLeft, tRight, w, now);
   drawAdvanced(ctx, h, tLeft, tRight, w, now, "veil-note");
   drawUnitSeries(ctx, {
     values: pack.pres,
@@ -412,6 +552,7 @@ function drawAir(tLeft, tRight, now) {
     width: 1.4,
     tLeft,
     tRight,
+    tMax: now,
     w,
     h,
   });
@@ -423,7 +564,7 @@ function drawSpo2(tLeft, tRight, now) {
   const { ctx, w, h } = setupCanvas($("c-spo2"));
   ctx.clearRect(0, 0, w, h);
   drawGrid(ctx, w, h);
-  drawEvents(ctx, h, tLeft, tRight, w);
+  drawEvents(ctx, h, tLeft, tRight, w, now);
   drawAdvanced(ctx, h, tLeft, tRight, w, now);
   drawUnitSeries(ctx, {
     values: pack.spo2,
@@ -433,6 +574,7 @@ function drawSpo2(tLeft, tRight, now) {
     width: 2,
     tLeft,
     tRight,
+    tMax: now,
     w,
     h,
   });
@@ -444,7 +586,7 @@ function drawOverlay(tLeft, tRight, now) {
   const { ctx, w, h } = setupCanvas($("c-overlay"));
   ctx.clearRect(0, 0, w, h);
   drawGrid(ctx, w, h);
-  drawEvents(ctx, h, tLeft, tRight, w);
+  drawEvents(ctx, h, tLeft, tRight, w, now);
   drawAdvanced(ctx, h, tLeft, tRight, w, now, "veil-note-overlay");
 
   const yThr = yOfUnit(ctrl.threshold, h);
@@ -458,7 +600,7 @@ function drawOverlay(tLeft, tRight, now) {
 
   const unitRange = { lo: 0, hi: 1 };
   const p0 = Math.max(0, Math.floor(tLeft));
-  const p1 = Math.min(controllerProbs.length, Math.ceil(tRight) + 1);
+  const p1 = Math.min(controllerProbs.length, Math.floor(Math.min(tRight, now)) + 1);
   if (p1 > p0) {
     ctx.beginPath();
     ctx.fillStyle = "rgba(196,242,90,0.1)";
@@ -478,6 +620,7 @@ function drawOverlay(tLeft, tRight, now) {
     width: 1.2,
     tLeft,
     tRight,
+    tMax: now,
     w,
     h,
   });
@@ -489,6 +632,7 @@ function drawOverlay(tLeft, tRight, now) {
     width: 2,
     tLeft,
     tRight,
+    tMax: now,
     w,
     h,
   });
@@ -500,6 +644,7 @@ function drawOverlay(tLeft, tRight, now) {
     width: 1.1,
     tLeft,
     tRight,
+    tMax: now,
     w,
     h,
   });
@@ -511,6 +656,7 @@ function drawOverlay(tLeft, tRight, now) {
     width: 2.2,
     tLeft,
     tRight,
+    tMax: now,
     w,
     h,
   });
@@ -537,7 +683,11 @@ function drawModel(tLeft, tRight, now) {
   ctx.stroke();
   ctx.setLineDash([]);
   const i0 = Math.max(0, Math.floor(tLeft));
-  const i1 = Math.min(controllerProbs.length, Math.ceil(tRight) + 1);
+  const i1 = Math.min(controllerProbs.length, Math.floor(Math.min(tRight, now)) + 1);
+  if (i1 <= i0) {
+    drawNow(ctx, h, tLeft, tRight, w, now);
+    return;
+  }
   ctx.beginPath();
   ctx.fillStyle = "rgba(196,242,90,0.18)";
   ctx.moveTo(xOf(i0, tLeft, tRight, w), h);
@@ -545,7 +695,7 @@ function drawModel(tLeft, tRight, now) {
     const y = h - controllerProbs[i] * (h - 8) - 4;
     ctx.lineTo(xOf(i, tLeft, tRight, w), y);
   }
-  ctx.lineTo(xOf(i1, tLeft, tRight, w), h);
+  ctx.lineTo(xOf(i1 - 1, tLeft, tRight, w), h);
   ctx.closePath();
   ctx.fill();
   ctx.beginPath();
@@ -584,8 +734,21 @@ function drawMini(now) {
     ctx.fillStyle = "rgba(148,163,184,0.45)";
     ctx.fillRect((t / n) * w, 0, w / n + 0.5, h);
   }
+  for (const t of coldStartTimes()) {
+    const x = (t / n) * w;
+    ctx.fillStyle = "#38bdf8";
+    ctx.beginPath();
+    ctx.moveTo(x - 4, 0);
+    ctx.lineTo(x + 4, 0);
+    ctx.lineTo(x, 7);
+    ctx.closePath();
+    ctx.fill();
+  }
+  const xNow = (now / n) * w;
+  ctx.fillStyle = "rgba(7,9,13,0.62)"; // clip map: dim the part not played yet
+  ctx.fillRect(xNow, 0, Math.max(0, w - xNow), h);
   ctx.fillStyle = "#f8fafc";
-  ctx.fillRect((now / n) * w, 0, 2, h);
+  ctx.fillRect(xNow, 0, 2, h);
 }
 
 function render() {
@@ -633,9 +796,54 @@ function tick(ts) {
   requestAnimationFrame(tick);
 }
 
+function coldStartTimes() {
+  return pack.events
+    .filter((e) => e.is_cluster_first)
+    .map((e) => e.start)
+    .sort((a, b) => a - b);
+}
+
+function targetStartTimes() {
+  return pack.events.map((e) => e.start).sort((a, b) => a - b);
+}
+
+// Next entry whose pre-roll position is still ahead of us; wraps to the first.
+function nextSeekTarget(starts) {
+  const ahead = starts.filter((s) => s - PRE_ROLL_SEC > tNow + 0.5);
+  const target = ahead.length ? ahead[0] : starts[0];
+  return target == null ? null : target;
+}
+
+function seekBefore(start) {
+  tNow = Math.max(0, start - PRE_ROLL_SEC);
+  lastActionSent = Math.floor(tNow) - 1;
+  render();
+}
+
+// Opening frame: first cold start that has a full pre-roll of history behind it
+// and finds the device retracted, so the advance happens in front of the audience.
 function burstT() {
-  const first = pack.events.reduce((m, e) => Math.min(m, e.start), 1e9);
-  return Math.max(0, first - 45);
+  const cold = coldStartTimes();
+  const withHistory = cold.filter((t) => t >= PRE_ROLL_SEC + 20);
+  const retracted = withHistory.filter(
+    (t) => !sim.advanced[Math.floor(t - PRE_ROLL_SEC)],
+  );
+  const pick = retracted[0] ?? withHistory[0] ?? cold[0];
+  if (pick == null) return 0;
+  return Math.max(0, pick - PRE_ROLL_SEC);
+}
+
+function updateSeekHint() {
+  const cold = coldStartTimes();
+  if (!cold.length) {
+    $("seek-hint").textContent = "cold starts: none in clip";
+    return;
+  }
+  const next = nextSeekTarget(cold);
+  const idx = cold.indexOf(next) + 1;
+  const wrapped = next - PRE_ROLL_SEC <= tNow + 0.5;
+  $("seek-hint").textContent =
+    `cold start ${idx}/${cold.length} at ${fmt(next)}` + (wrapped ? " (wrap)" : "");
 }
 
 async function connectEsp() {
@@ -643,22 +851,68 @@ async function connectEsp() {
     try {
       const port = await navigator.serial.requestPort();
       await port.open({ baudRate: 115200 });
-      espWriter = port.writable.getWriter();
-      $("pill-esp").textContent = "ESP Web Serial";
-      $("pill-esp").classList.add("on");
+      esp.port = port;
+      esp.mode = "webserial";
+      esp.writer = port.writable.getWriter();
+      setEspState("open");
+      readEspLoop(port);
+      await testEspLink();
       return;
     } catch (e) {
-      console.warn(e);
+      // user cancelled the picker, or the port is busy: fall through to server
+      esp.mode = "none";
+      esp.writer = null;
+      setEspState("none", String(e.message || e));
     }
   }
-  const st = await fetch("/api/esp/status").then((r) => r.json()).catch(() => null);
+  const st = await fetch("/api/esp/status")
+    .then((r) => r.json())
+    .catch(() => null);
   if (st && st.linked) {
-    espFallback = true;
-    $("pill-esp").textContent = `ESP ${st.port || "serial"}`;
-    $("pill-esp").classList.add("on");
-  } else {
-    alert("No ESP. Use Chrome/Edge for Web Serial, or start: python server.py --esp auto");
+    esp.mode = "server";
+    setEspState(st.rx_count ? "live" : "open");
+    if (st.last_rx) noteEspRx(st.last_rx);
+    await testEspLink();
+    return;
   }
+  setEspState("none");
+  alert(
+    "No ESP link.\n\n" +
+      "Option 1: Chrome/Edge over http://127.0.0.1 -> Connect ESP -> pick the usbserial port.\n" +
+      "Option 2: python server.py --esp auto (server owns the serial port).\n\n" +
+      "Close the Arduino IDE Serial Monitor first; it holds the port.",
+  );
+}
+
+// Sends a harmless help command; the firmware answers, which proves two-way comms.
+async function testEspLink() {
+  if (esp.mode === "none") {
+    setEspState("none");
+    return false;
+  }
+  const before = esp.rxCount;
+  if (esp.mode === "server") {
+    try {
+      const res = await fetch("/api/esp/ping", { method: "POST" }).then((r) => r.json());
+      esp.lastTx = "?";
+      if (res.reply) {
+        noteEspRx(res.reply);
+        return true;
+      }
+      setEspState("err", "no reply from ESP");
+      return false;
+    } catch (e) {
+      setEspState("err", String(e.message || e));
+      return false;
+    }
+  }
+  await sendEsp("?");
+  for (let i = 0; i < 20; i++) {
+    await new Promise((r) => setTimeout(r, 100));
+    if (esp.rxCount > before) return true;
+  }
+  setEspState("err", "no reply from ESP (check baud 115200 / firmware)");
+  return false;
 }
 
 function updatePolicyUi() {
@@ -674,21 +928,31 @@ function updatePolicyUi() {
 async function boot() {
   pack = await fetch("/api/pack").then((r) => r.json());
   $("pill-sub").textContent = `MESA ${pack.meta.subject_id}`;
-  $("pill-geo").textContent = "A=10s | lead=30s | no scored wake";
+  $("pill-geo").textContent = "A=10s | lead=30s | no wake";
   NORM.pres = robustRange(pack.pres);
   const spo2Range = robustRange(pack.spo2, 0.01, 1.0, 0.05);
   NORM.spo2 = { lo: spo2Range.lo, hi: Math.min(100, spo2Range.hi) };
 
-  const wantedLayout = new URLSearchParams(location.search).get("layout");
+  const params = new URLSearchParams(location.search);
+  const wantedSpeed = Number(params.get("speed"));
+  if ([1, 2, 4, 8, 16].includes(wantedSpeed)) {
+    speed = wantedSpeed;
+    $("speed").value = String(wantedSpeed);
+  }
+  const wantedLayout = params.get("layout");
   if (wantedLayout === "overlay" || wantedLayout === "stack") {
     layoutMode = wantedLayout;
     $("layout").value = wantedLayout;
     $("stage").className = `stage mode-${wantedLayout}`;
   }
-  tNow = burstT();
   resim();
+  tNow = burstT();
   render();
   requestAnimationFrame(tick);
+  if (params.get("play") === "1") {
+    playing = true;
+    $("btn-play").textContent = "Pause";
+  }
 
   $("btn-play").onclick = () => {
     playing = !playing;
@@ -697,14 +961,17 @@ async function boot() {
   $("btn-reset").onclick = () => {
     playing = false;
     $("btn-play").textContent = "Play";
-    tNow = 0;
-    lastActionSent = -1;
-    render();
-  };
-  $("btn-burst").onclick = () => {
     tNow = burstT();
     lastActionSent = Math.floor(tNow) - 1;
     render();
+  };
+  $("btn-cold").onclick = () => {
+    const target = nextSeekTarget(coldStartTimes());
+    if (target != null) seekBefore(target);
+  };
+  $("btn-event").onclick = () => {
+    const target = nextSeekTarget(targetStartTimes());
+    if (target != null) seekBefore(target);
   };
   $("speed").onchange = (e) => {
     speed = Number(e.target.value);
@@ -747,17 +1014,25 @@ async function boot() {
   }
   updatePolicyUi();
   $("btn-esp").onclick = connectEsp;
+  $("btn-esp-test").onclick = testEspLink;
+  $("btn-adv").onclick = () => sendEsp("ADVANCE");
+  $("btn-ret").onclick = () => sendEsp("RETRACT");
+  $("btn-stop").onclick = () => sendEsp("s");
   window.addEventListener("resize", render);
-  fetch("/api/esp/status")
+
+  paintEspLink();
+  const st = await fetch("/api/esp/status")
     .then((r) => r.json())
-    .then((st) => {
-      if (st.linked) {
-        espFallback = true;
-        $("pill-esp").textContent = `ESP ${st.port || "serial"}`;
-        $("pill-esp").classList.add("on");
-      }
-    })
-    .catch(() => {});
+    .catch(() => null);
+  if (st && st.linked) {
+    esp.mode = "server";
+    setEspState(st.rx_count ? "live" : "open");
+    if (st.last_rx) noteEspRx(st.last_rx);
+  }
+  setInterval(() => {
+    if (esp.mode === "server") pollEspServer();
+    else paintEspLink();
+  }, 2000);
 }
 
 boot();

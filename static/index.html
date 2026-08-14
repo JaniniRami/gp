@@ -10,17 +10,55 @@
 </head>
 <body>
   <div class="app">
-    <header class="top">
-      <div class="brand">
-        <h1>PROACTMAD</h1>
-        <span>live OSA actuation  |  untreated PSG replay</span>
+    <header class="topbar">
+      <div class="bar bar-status">
+        <div class="brand">
+          <h1>PROACTMAD</h1>
+          <span>live OSA actuation</span>
+        </div>
+        <div class="pills">
+          <div class="pill" id="pill-sub">MESA --</div>
+          <div class="pill" id="pill-split" title="test split, subject held out of training">held-out</div>
+          <div class="pill" id="pill-geo">A=10s | lead=30s</div>
+          <div class="pill" id="pill-mad">MAD retracted</div>
+        </div>
+        <div class="link" id="esp-chip" title="ESP32 actuator link">
+          <span class="dot" id="esp-dot"></span>
+          <span class="link-text" id="esp-text">ESP not connected</span>
+          <span class="link-rx" id="esp-rx">no reply yet</span>
+        </div>
+        <button id="btn-esp">Connect ESP</button>
+        <button id="btn-esp-test">Test link</button>
+        <div class="clock" id="clock">00:00 / 12:00</div>
       </div>
-      <div class="pills">
-        <div class="pill" id="pill-sub">MESA --</div>
-        <div class="pill" id="pill-split">subject held-out</div>
-        <div class="pill" id="pill-geo">A=10s  |  lead=30s</div>
-        <div class="pill" id="pill-esp">ESP disconnected</div>
-        <div class="pill" id="pill-mad">MAD retracted</div>
+
+      <div class="bar bar-controls">
+        <button class="primary" id="btn-play">Play</button>
+        <select id="speed" title="Replay speed">
+          <option value="1">1x live</option>
+          <option value="2">2x</option>
+          <option value="4">4x</option>
+          <option value="8" selected>8x</option>
+          <option value="16">16x</option>
+        </select>
+        <button id="btn-cold" title="Seek to 60 s before the next cluster-first (cold start) event">Next cold start</button>
+        <button id="btn-event" title="Seek to 60 s before the next target event">Next event</button>
+        <button id="btn-reset">Reset</button>
+        <span class="bar-sep"></span>
+        <select id="layout" title="Trace layout">
+          <option value="stack" selected>Stacked lanes</option>
+          <option value="overlay">Normalized overlay</option>
+        </select>
+        <label class="slider">window
+          <input id="win" type="range" min="30" max="120" value="60" />
+          <span id="win-lab">60s</span>
+        </label>
+        <label class="slider">threshold
+          <input id="thr" type="range" min="20" max="90" value="55" />
+          <span id="thr-lab">0.55</span>
+        </label>
+        <span class="bar-sep"></span>
+        <div class="seek-hint" id="seek-hint">cold starts: --</div>
       </div>
     </header>
 
@@ -34,6 +72,12 @@
           </svg>
           <div class="state-name" id="mad-state">RETRACTED</div>
           <div class="state-sub" id="mad-sub">Waiting for fire_now above threshold</div>
+          <div class="jog">
+            <button class="mini" id="btn-adv" title="Send ADVANCE to the ESP32">Advance</button>
+            <button class="mini" id="btn-ret" title="Send RETRACT to the ESP32">Retract</button>
+            <button class="mini" id="btn-stop" title="Send STOP to the ESP32">Stop</button>
+          </div>
+          <div class="esp-line" id="esp-last">ESP: no link</div>
         </div>
         <div class="card">
           <h2>This clip</h2>
@@ -67,6 +111,10 @@
             <label>Earliest lead (s)<input id="p-lead" type="number" min="5" max="120" value="30" /></label>
           </div>
         </div>
+        <p class="disclaimer">
+          Untreated MESA night: gray = already advanced. Coverage is advance timing vs
+          the arousal deadline, not proven prevention.
+        </p>
       </aside>
 
       <section class="stage mode-stack" id="stage">
@@ -100,37 +148,10 @@
           <div><span class="sw" style="background:#c084fc"></span>Hypopnea / Unsure</div>
           <div><span class="sw" style="background:#ffe08a"></span>Arousal</div>
           <div><span class="sw" style="background:#64748b"></span>MAD advanced (hold)</div>
+          <div><span class="sw cold-sw"></span>Cold start (cluster-first)</div>
         </div>
       </section>
     </div>
-
-    <footer class="bottom">
-      <button class="primary" id="btn-play">Play</button>
-      <select id="speed">
-        <option value="1">1x live</option>
-        <option value="2">2x</option>
-        <option value="4">4x</option>
-        <option value="8" selected>8x</option>
-        <option value="16">16x</option>
-      </select>
-      <select id="layout" title="Trace layout">
-        <option value="stack" selected>Stacked lanes</option>
-        <option value="overlay">Normalized overlay</option>
-      </select>
-      <button id="btn-burst">Jump to burst</button>
-      <button id="btn-reset">Reset</button>
-      <label class="slider">window
-        <input id="win" type="range" min="30" max="120" value="60" />
-        <span id="win-lab">60s</span>
-      </label>
-      <label class="slider">threshold
-        <input id="thr" type="range" min="20" max="90" value="55" />
-        <span id="thr-lab">0.55</span>
-      </label>
-      <button id="btn-esp">Connect ESP</button>
-      <div class="clock" id="clock">00:00 / 12:00</div>
-      <div class="foot">Untreated MESA night: gray hold = device already advanced, controller not re-triggering. Coverage is timing vs arousal deadline, not proven prevention.</div>
-    </footer>
   </div>
   <script src="/static/app.js"></script>
 </body>
