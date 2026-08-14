@@ -122,6 +122,7 @@ function drawGrid(ctx, w, h, color = "#182033") {
 let pack = null;
 let ctrl = new MadController();
 let sim = { advanced: [], actions: [], nAdvances: 0 };
+let controllerProbs = [];
 let tNow = 0;
 let playing = false;
 let lastTs = 0;
@@ -130,6 +131,40 @@ let speed = 8;
 let lastActionSent = -1;
 let espWriter = null;
 let espFallback = false;
+
+function numberParam(id, fallback) {
+  const value = Number($(id).value);
+  return Number.isFinite(value) ? value : fallback;
+}
+
+function selectedKinds() {
+  const kinds = new Set();
+  if ($("target-oa").checked) kinds.add("obstructive");
+  if ($("target-hyp").checked) kinds.add("hypopnea");
+  if ($("target-unsure").checked) kinds.add("unsure");
+  return kinds;
+}
+
+function oracleFireNow() {
+  const probs = new Array(pack.duration_sec).fill(0);
+  const kinds = selectedKinds();
+  const lag = numberParam("p-lag", 10);
+  const lead = numberParam("p-lead", 30);
+  for (const event of pack.events) {
+    if (!event.arousal_linked || !kinds.has(event.kind)) continue;
+    const deadlineRef = event.arousal_start != null ? event.arousal_start : event.end;
+    const first = Math.max(0, Math.ceil(event.start - lead));
+    const last = Math.min(probs.length - 1, Math.floor(deadlineRef - lag));
+    for (let t = first; t <= last; t++) probs[t] = 1;
+  }
+  return probs;
+}
+
+function policyEvents(events) {
+  if ($("policy-source").value === "model") return events;
+  const kinds = selectedKinds();
+  return events.filter((event) => kinds.has(event.kind));
+}
 
 async function sendEsp(cmd) {
   if (espWriter) {
@@ -148,10 +183,22 @@ async function sendEsp(cmd) {
 
 function resim() {
   const thr = Number($("thr").value) / 100;
+  const oracle = $("policy-source").value === "oracle";
   ctrl.threshold = thr;
-  sim = ctrl.simulate(pack.fire_now, pack.wake);
+  ctrl.advanceSec = numberParam("p-advance", 10);
+  ctrl.refractorySec = numberParam("p-refractory", 60);
+  ctrl.quietRetractSec = numberParam("p-quiet", 90);
+  controllerProbs = oracle ? oracleFireNow() : pack.fire_now;
+  sim = ctrl.simulate(controllerProbs, pack.wake);
   $("m-thr").textContent = thr.toFixed(2);
   $("thr-lab").textContent = thr.toFixed(2);
+  $("model-tag").textContent = oracle
+    ? "Controller input - annotation oracle - active model"
+    : "Model - fire_now - active";
+  $("pill-geo").textContent = oracle
+    ? `ORACLE | A=${numberParam("p-lag", 10)}s | lead=${numberParam("p-lead", 30)}s`
+    : "MODEL | A=10s | lead=30s | no scored wake";
+  $("pill-geo").classList.toggle("adv", oracle);
   lastActionSent = -1;
   updateHud();
 }
@@ -159,9 +206,11 @@ function resim() {
 function coverageNow() {
   const n = Math.max(1, Math.floor(tNow) + 1);
   const adv = sim.advanced.slice(0, n);
-  const evs = pack.events.filter((e) => e.start <= tNow + 1);
+  const evs = policyEvents(pack.events).filter((e) => e.start <= tNow + 1);
   const linked = evs.filter((e) => e.arousal_linked);
-  const cov = linked.filter((e) => eventCovered(e, sim.advanced)).length;
+  const lag = $("policy-source").value === "oracle" ? numberParam("p-lag", 10) : 10;
+  const lead = $("policy-source").value === "oracle" ? numberParam("p-lead", 30) : 30;
+  const cov = linked.filter((e) => eventCovered(e, sim.advanced, lag, lead)).length;
   return { linked: linked.length, cov };
 }
 
@@ -179,7 +228,7 @@ function updateHud() {
   $("mad-state").textContent = POS_NAME[pos];
   $("pill-mad").textContent = advLabel(pos);
   $("pill-mad").classList.toggle("adv", pos === ADVANCED || pos === ADVANCING);
-  const p = pack.fire_now[i] ?? 0;
+  const p = controllerProbs[i] ?? 0;
   $("m-p").textContent = p.toFixed(2);
   $("m-adv").textContent = String(sim.nAdvances);
   const frac = sim.advanced.length
@@ -354,12 +403,12 @@ function drawModel(tLeft, tRight, now) {
   ctx.stroke();
   ctx.setLineDash([]);
   const i0 = Math.max(0, Math.floor(tLeft));
-  const i1 = Math.min(pack.fire_now.length, Math.ceil(tRight) + 1);
+  const i1 = Math.min(controllerProbs.length, Math.ceil(tRight) + 1);
   ctx.beginPath();
   ctx.fillStyle = "rgba(196,242,90,0.18)";
   ctx.moveTo(xOf(i0, tLeft, tRight, w), h);
   for (let i = i0; i < i1; i++) {
-    const y = h - pack.fire_now[i] * (h - 8) - 4;
+    const y = h - controllerProbs[i] * (h - 8) - 4;
     ctx.lineTo(xOf(i, tLeft, tRight, w), y);
   }
   ctx.lineTo(xOf(i1, tLeft, tRight, w), h);
@@ -369,7 +418,7 @@ function drawModel(tLeft, tRight, now) {
   ctx.strokeStyle = "#c4f25a";
   ctx.lineWidth = 1.8;
   for (let i = i0; i < i1; i++) {
-    const y = h - pack.fire_now[i] * (h - 8) - 4;
+    const y = h - controllerProbs[i] * (h - 8) - 4;
     const x = xOf(i, tLeft, tRight, w);
     if (i === i0) ctx.moveTo(x, y);
     else ctx.lineTo(x, y);
@@ -474,6 +523,16 @@ async function connectEsp() {
   }
 }
 
+function updatePolicyUi() {
+  const oracle = $("policy-source").value === "oracle";
+  for (const id of ["target-oa", "target-hyp", "target-unsure", "p-lag", "p-lead"]) {
+    $(id).disabled = !oracle;
+  }
+  $("oracle-note").textContent = oracle
+    ? "Presentation oracle: target kind comes from scored annotations, not a deployable real-time kind classifier."
+    : "Honest deployed input: one combined model trained on OA + hypopnea + Unsure; event kind cannot be switched separately.";
+}
+
 async function boot() {
   pack = await fetch("/api/pack").then((r) => r.json());
   $("pill-sub").textContent = `MESA ${pack.meta.subject_id}`;
@@ -511,6 +570,27 @@ async function boot() {
     resim();
     render();
   };
+  $("policy-source").onchange = () => {
+    updatePolicyUi();
+    resim();
+    render();
+  };
+  for (const id of [
+    "target-oa",
+    "target-hyp",
+    "target-unsure",
+    "p-advance",
+    "p-refractory",
+    "p-quiet",
+    "p-lag",
+    "p-lead",
+  ]) {
+    $(id).onchange = () => {
+      resim();
+      render();
+    };
+  }
+  updatePolicyUi();
   $("btn-esp").onclick = connectEsp;
   window.addEventListener("resize", render);
   fetch("/api/esp/status")

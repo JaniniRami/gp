@@ -1,4 +1,4 @@
-// ProactMAD — DRV8871 linear-actuator firmware (ESP32 Arduino core 3.x)
+// ProactMAD -- DRV8871 linear-actuator firmware (ESP32 Arduino core 3.x)
 // IN1 (open / advance)  -> GPIO 27
 // IN2 (close / retract) -> GPIO 26
 //
