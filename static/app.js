@@ -1017,10 +1017,38 @@ function paintStory(entry) {
   $("story-num").textContent = bits.join(" | ");
 }
 
+// Try each URL in turn; an older server process may not have the clip routes yet.
+async function fetchFirstJson(urls) {
+  let lastErr = null;
+  for (const url of urls) {
+    try {
+      const r = await fetch(url);
+      if (!r.ok) {
+        lastErr = new Error(`${url} -> ${r.status}`);
+        continue;
+      }
+      return await r.json();
+    } catch (e) {
+      lastErr = e;
+    }
+  }
+  if (lastErr) console.warn("fetch failed:", lastErr.message || lastErr);
+  return null;
+}
+
 async function loadClip(id) {
   const entry = clipEntry(id);
-  const url = entry ? `/api/pack?clip=${encodeURIComponent(entry.pack_id || entry.id)}` : "/api/pack";
-  pack = await fetch(url).then((r) => r.json());
+  const packId = entry ? entry.pack_id || entry.id : null;
+  const urls = packId
+    ? [`/api/pack?clip=${encodeURIComponent(packId)}`, `/data/clips/${packId}.json`, "/api/pack"]
+    : ["/api/pack", "/data/pack.json"];
+  const loaded = await fetchFirstJson(urls);
+  if (!loaded) {
+    $("story-title").textContent = "Clip failed to load";
+    $("story-watch").textContent = "Check the server terminal; data/clips may be missing.";
+    return;
+  }
+  pack = loaded;
   if (entry) $("clip").value = entry.id;
   $("pill-sub").textContent = `MESA ${pack.meta.subject_id}`;
   NORM.pres = robustRange(pack.pres);
@@ -1037,13 +1065,13 @@ async function loadClip(id) {
 }
 
 async function boot() {
-  const index = await fetch("/api/clips")
-    .then((r) => r.json())
-    .catch(() => null);
+  // /api/clips is the normal path; the static file works with a stale server or
+  // any plain file server.
+  const index = await fetchFirstJson(["/api/clips", "/data/clips/index.json"]);
   clipIndex = (index && index.clips) || [];
   const sel = $("clip");
+  sel.innerHTML = "";
   if (clipIndex.length) {
-    sel.innerHTML = "";
     for (const c of clipIndex) {
       const opt = document.createElement("option");
       opt.value = c.id;
@@ -1051,7 +1079,12 @@ async function boot() {
       sel.appendChild(opt);
     }
   } else {
-    $("clip").parentElement.style.display = "none";
+    // Stay visible and say why, instead of disappearing from the top bar.
+    const opt = document.createElement("option");
+    opt.textContent = "library not found - run _build_clips.py";
+    sel.appendChild(opt);
+    sel.disabled = true;
+    sel.title = "data/clips/index.json is missing, or this server predates /api/clips";
   }
 
   const params = new URLSearchParams(location.search);

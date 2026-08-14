@@ -79,6 +79,8 @@ def _autodetect_port() -> str | None:
 def create_app(esp_port: str | None) -> FastAPI:
     app = FastAPI(title="ProactMAD live demo")
     app.mount("/static", StaticFiles(directory=ROOT / "static"), name="static")
+    # also served raw so the UI keeps working behind a plain file server
+    app.mount("/data", StaticFiles(directory=ROOT / "data"), name="data")
 
     @app.get("/")
     def index():
@@ -177,6 +179,14 @@ def main() -> int:
     if not PACK_PATH.is_file():
         print("Missing data/pack.json", file=sys.stderr)
         return 1
+
+    if CLIP_INDEX.is_file():
+        clips = json.loads(CLIP_INDEX.read_text(encoding="utf-8")).get("clips", [])
+        print(f"clip library: {len(clips)} examples", flush=True)
+        for c in clips:
+            print(f"  - {c['id']:15s} MESA {c.get('subject_id')}  {c.get('title')}", flush=True)
+    else:
+        print("clip library: none (data/clips/index.json missing)", file=sys.stderr)
 
     app = create_app(args.esp)
     url = f"http://{args.host}:{args.port}/"

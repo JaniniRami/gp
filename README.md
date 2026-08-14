@@ -88,6 +88,11 @@ URL parameters for a preset opening state: `/?clip=burst_hold`, `/?t=660` (jump 
 second in the clip), `/?layout=overlay`, `/?play=1`, `/?speed=16`. They combine, so
 `/?clip=oa_lead&t=430&speed=4` opens exactly on the advance you want to talk about.
 
+If the **clip** menu is empty or disabled ("library not found"), the page is talking to
+an old server process. Stop it, `git pull`, run `python server.py` again, and hard-reload
+the browser (Cmd+Shift+R). The startup log lists the clips it found; the UI also falls
+back to reading `data/clips/index.json` directly, so a plain file server works too.
+
 ### Screen layout
 
 The dashboard is sized to the browser viewport, so everything (traces, clip map,
