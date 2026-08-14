@@ -131,6 +131,66 @@ let speed = 8;
 let lastActionSent = -1;
 let espWriter = null;
 let espFallback = false;
+let layoutMode = "stack";
+
+// Robust per-signal display ranges, computed once from the whole clip so the
+// vertical scale never jumps while the trace scrolls.
+const NORM = { pres: { lo: -1, hi: 1 }, spo2: { lo: 85, hi: 100 } };
+
+function quantile(sorted, q) {
+  if (!sorted.length) return 0;
+  const pos = (sorted.length - 1) * q;
+  const lo = Math.floor(pos);
+  const hi = Math.ceil(pos);
+  if (lo === hi) return sorted[lo];
+  return sorted[lo] + (sorted[hi] - sorted[lo]) * (pos - lo);
+}
+
+function robustRange(values, qLo = 0.005, qHi = 0.995, padFrac = 0.08) {
+  const sorted = Float64Array.from(values).sort();
+  let lo = quantile(sorted, qLo);
+  let hi = quantile(sorted, qHi);
+  if (!(hi > lo)) {
+    const c = Number.isFinite(lo) ? lo : 0;
+    lo = c - 1;
+    hi = c + 1;
+  }
+  const pad = (hi - lo) * padFrac;
+  return { lo: lo - pad, hi: hi + pad };
+}
+
+function unitOf(value, range) {
+  const u = (value - range.lo) / (range.hi - range.lo);
+  return Math.min(1, Math.max(0, u));
+}
+
+function yOfUnit(u, h) {
+  return h - u * (h - 10) - 5;
+}
+
+function drawScaleHint(ctx, h, text) {
+  ctx.fillStyle = "rgba(139,151,171,0.85)";
+  ctx.font = '10px "IBM Plex Mono", monospace';
+  ctx.textAlign = "left";
+  ctx.fillText(text, 10, h - 6);
+}
+
+function drawUnitSeries(ctx, opts) {
+  const { values, fs, range, color, width, tLeft, tRight, w, h } = opts;
+  const i0 = Math.max(0, Math.floor(tLeft * fs));
+  const i1 = Math.min(values.length, Math.ceil(tRight * fs) + 1);
+  if (i1 <= i0) return;
+  ctx.beginPath();
+  ctx.strokeStyle = color;
+  ctx.lineWidth = width;
+  for (let i = i0; i < i1; i++) {
+    const x = xOf(i / fs, tLeft, tRight, w);
+    const y = yOfUnit(unitOf(values[i], range), h);
+    if (i === i0) ctx.moveTo(x, y);
+    else ctx.lineTo(x, y);
+  }
+  ctx.stroke();
+}
 
 function numberParam(id, fallback) {
   const value = Number($(id).value);
@@ -248,11 +308,12 @@ function updateHud() {
             ? "fire_now above threshold"
             : "Monitoring nasal pressure + SpO2";
   const jaw = $("jaw-fill");
-  const x = pos === RETRACTED ? 28 : pos === ADVANCING ? 90 : pos === ADVANCED ? 170 : 90;
+  const x = pos === RETRACTED ? 14 : pos === ADVANCED ? 186 : 100;
   jaw.setAttribute("x", String(x));
   jaw.setAttribute("fill", pos === RETRACTED ? "#64748b" : "#c4f25a");
   $("clock").textContent = `${fmt(tNow)} / ${fmt(pack.duration_sec)}`;
   $("now-air").textContent = `t = ${fmt(tNow)}`;
+  $("now-overlay").textContent = `t = ${fmt(tNow)}`;
 }
 
 function advLabel(pos) {
@@ -289,7 +350,7 @@ function drawEvents(ctx, h, tLeft, tRight, w) {
   }
 }
 
-function drawAdvanced(ctx, h, tLeft, tRight, w, now, withVeil = false) {
+function drawAdvanced(ctx, h, tLeft, tRight, w, now, veilNoteId = null) {
   ctx.fillStyle = "rgba(100,116,139,0.28)";
   let run = null;
   const n = sim.advanced.length;
@@ -308,9 +369,9 @@ function drawAdvanced(ctx, h, tLeft, tRight, w, now, withVeil = false) {
     const x1 = xOf(Math.min(now, tRight), tLeft, tRight, w);
     ctx.fillRect(x0, 0, x1 - x0, h);
   }
-  if (!withVeil) return;
+  if (!veilNoteId) return;
   const i = Math.min(n - 1, Math.max(0, Math.floor(now)));
-  const note = $("veil-note");
+  const note = $(veilNoteId);
   if (sim.advanced[i]) {
     const xNow = xOf(now, tLeft, tRight, w);
     const grd = ctx.createLinearGradient(xNow, 0, w, 0);
@@ -342,29 +403,19 @@ function drawAir(tLeft, tRight, now) {
   ctx.clearRect(0, 0, w, h);
   drawGrid(ctx, w, h);
   drawEvents(ctx, h, tLeft, tRight, w);
-  drawAdvanced(ctx, h, tLeft, tRight, w, now, true);
-  const fs = pack.fs_pres;
-  const i0 = Math.max(0, Math.floor(tLeft * fs));
-  const i1 = Math.min(pack.pres.length, Math.ceil(tRight * fs));
-  let mn = 1e9, mx = -1e9;
-  for (let i = i0; i < i1; i++) {
-    const v = pack.pres[i];
-    if (v < mn) mn = v;
-    if (v > mx) mx = v;
-  }
-  const pad = Math.max(0.05, (mx - mn) * 0.15);
-  mn -= pad; mx += pad;
-  ctx.beginPath();
-  ctx.strokeStyle = "#5ec8ff";
-  ctx.lineWidth = 1.4;
-  for (let i = i0; i < i1; i++) {
-    const t = i / fs;
-    const x = xOf(t, tLeft, tRight, w);
-    const y = h - ((pack.pres[i] - mn) / (mx - mn)) * (h - 8) - 4;
-    if (i === i0) ctx.moveTo(x, y);
-    else ctx.lineTo(x, y);
-  }
-  ctx.stroke();
+  drawAdvanced(ctx, h, tLeft, tRight, w, now, "veil-note");
+  drawUnitSeries(ctx, {
+    values: pack.pres,
+    fs: pack.fs_pres,
+    range: NORM.pres,
+    color: "#5ec8ff",
+    width: 1.4,
+    tLeft,
+    tRight,
+    w,
+    h,
+  });
+  drawScaleHint(ctx, h, `scale ${NORM.pres.lo.toFixed(2)} .. ${NORM.pres.hi.toFixed(2)}`);
   drawNow(ctx, h, tLeft, tRight, w, now);
 }
 
@@ -374,18 +425,101 @@ function drawSpo2(tLeft, tRight, now) {
   drawGrid(ctx, w, h);
   drawEvents(ctx, h, tLeft, tRight, w);
   drawAdvanced(ctx, h, tLeft, tRight, w, now);
-  const i0 = Math.max(0, Math.floor(tLeft));
-  const i1 = Math.min(pack.spo2.length, Math.ceil(tRight) + 1);
+  drawUnitSeries(ctx, {
+    values: pack.spo2,
+    fs: pack.fs_decision,
+    range: NORM.spo2,
+    color: "#ff6b8a",
+    width: 2,
+    tLeft,
+    tRight,
+    w,
+    h,
+  });
+  drawScaleHint(ctx, h, `${NORM.spo2.lo.toFixed(1)} .. ${NORM.spo2.hi.toFixed(1)} %`);
+  drawNow(ctx, h, tLeft, tRight, w, now);
+}
+
+function drawOverlay(tLeft, tRight, now) {
+  const { ctx, w, h } = setupCanvas($("c-overlay"));
+  ctx.clearRect(0, 0, w, h);
+  drawGrid(ctx, w, h);
+  drawEvents(ctx, h, tLeft, tRight, w);
+  drawAdvanced(ctx, h, tLeft, tRight, w, now, "veil-note-overlay");
+
+  const yThr = yOfUnit(ctrl.threshold, h);
+  ctx.strokeStyle = "#64748b";
+  ctx.setLineDash([3, 3]);
   ctx.beginPath();
-  ctx.strokeStyle = "#ff6b8a";
-  ctx.lineWidth = 2;
-  for (let i = i0; i < i1; i++) {
-    const x = xOf(i, tLeft, tRight, w);
-    const y = h - ((pack.spo2[i] - 85) / 15) * (h - 10) - 5;
-    if (i === i0) ctx.moveTo(x, y);
-    else ctx.lineTo(x, y);
-  }
+  ctx.moveTo(0, yThr);
+  ctx.lineTo(w, yThr);
   ctx.stroke();
+  ctx.setLineDash([]);
+
+  const unitRange = { lo: 0, hi: 1 };
+  const p0 = Math.max(0, Math.floor(tLeft));
+  const p1 = Math.min(controllerProbs.length, Math.ceil(tRight) + 1);
+  if (p1 > p0) {
+    ctx.beginPath();
+    ctx.fillStyle = "rgba(196,242,90,0.1)";
+    ctx.moveTo(xOf(p0, tLeft, tRight, w), h);
+    for (let i = p0; i < p1; i++) {
+      ctx.lineTo(xOf(i, tLeft, tRight, w), yOfUnit(controllerProbs[i], h));
+    }
+    ctx.lineTo(xOf(p1 - 1, tLeft, tRight, w), h);
+    ctx.closePath();
+    ctx.fill();
+  }
+  drawUnitSeries(ctx, {
+    values: pack.pres,
+    fs: pack.fs_pres,
+    range: NORM.pres,
+    color: "rgba(94,200,255,0.7)",
+    width: 1.2,
+    tLeft,
+    tRight,
+    w,
+    h,
+  });
+  drawUnitSeries(ctx, {
+    values: pack.spo2,
+    fs: pack.fs_decision,
+    range: NORM.spo2,
+    color: "#ff6b8a",
+    width: 2,
+    tLeft,
+    tRight,
+    w,
+    h,
+  });
+  drawUnitSeries(ctx, {
+    values: pack.active,
+    fs: pack.fs_decision,
+    range: unitRange,
+    color: "rgba(148,163,184,0.75)",
+    width: 1.1,
+    tLeft,
+    tRight,
+    w,
+    h,
+  });
+  drawUnitSeries(ctx, {
+    values: controllerProbs,
+    fs: pack.fs_decision,
+    range: unitRange,
+    color: "#c4f25a",
+    width: 2.2,
+    tLeft,
+    tRight,
+    w,
+    h,
+  });
+  drawScaleHint(
+    ctx,
+    h,
+    `Pres ${NORM.pres.lo.toFixed(2)}..${NORM.pres.hi.toFixed(2)}   ` +
+      `SpO2 ${NORM.spo2.lo.toFixed(1)}..${NORM.spo2.hi.toFixed(1)}%   prob 0..1`,
+  );
   drawNow(ctx, h, tLeft, tRight, w, now);
 }
 
@@ -458,9 +592,13 @@ function render() {
   if (!pack) return;
   const tRight = tNow + winSec * 0.18;
   const tLeft = tRight - winSec;
-  drawAir(tLeft, tRight, tNow);
-  drawSpo2(tLeft, tRight, tNow);
-  drawModel(tLeft, tRight, tNow);
+  if (layoutMode === "overlay") {
+    drawOverlay(tLeft, tRight, tNow);
+  } else {
+    drawAir(tLeft, tRight, tNow);
+    drawSpo2(tLeft, tRight, tNow);
+    drawModel(tLeft, tRight, tNow);
+  }
   drawMini(tNow);
   updateHud();
 }
@@ -529,14 +667,24 @@ function updatePolicyUi() {
     $(id).disabled = !oracle;
   }
   $("oracle-note").textContent = oracle
-    ? "Presentation oracle: target kind comes from scored annotations, not a deployable real-time kind classifier."
-    : "Honest deployed input: one combined model trained on OA + hypopnea + Unsure; event kind cannot be switched separately.";
+    ? "Oracle: kind from scored annotations, not a real-time classifier."
+    : "Combined model (OA + hypopnea + Unsure): kind cannot be switched.";
 }
 
 async function boot() {
   pack = await fetch("/api/pack").then((r) => r.json());
   $("pill-sub").textContent = `MESA ${pack.meta.subject_id}`;
   $("pill-geo").textContent = "A=10s | lead=30s | no scored wake";
+  NORM.pres = robustRange(pack.pres);
+  const spo2Range = robustRange(pack.spo2, 0.01, 1.0, 0.05);
+  NORM.spo2 = { lo: spo2Range.lo, hi: Math.min(100, spo2Range.hi) };
+
+  const wantedLayout = new URLSearchParams(location.search).get("layout");
+  if (wantedLayout === "overlay" || wantedLayout === "stack") {
+    layoutMode = wantedLayout;
+    $("layout").value = wantedLayout;
+    $("stage").className = `stage mode-${wantedLayout}`;
+  }
   tNow = burstT();
   resim();
   render();
@@ -560,6 +708,13 @@ async function boot() {
   };
   $("speed").onchange = (e) => {
     speed = Number(e.target.value);
+  };
+  $("layout").onchange = (e) => {
+    layoutMode = e.target.value;
+    $("stage").className = `stage mode-${layoutMode}`;
+    $("veil-note").style.display = "none";
+    $("veil-note-overlay").style.display = "none";
+    render();
   };
   $("win").oninput = (e) => {
     winSec = Number(e.target.value);

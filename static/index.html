@@ -28,13 +28,12 @@
       <aside class="side">
         <div class="card">
           <h2>Actuator</h2>
-          <svg class="jaw" id="jaw" viewBox="0 0 240 88" aria-hidden="true">
-            <rect x="18" y="18" width="204" height="52" rx="12" fill="#0b0f16" stroke="#2a364a"/>
-            <rect id="jaw-fill" x="28" y="28" width="24" height="32" rx="6" fill="#c4f25a"/>
-            <text x="120" y="78" text-anchor="middle" fill="#8b97ab" font-size="10" font-family="IBM Plex Mono">retracted ? advanced</text>
+          <svg class="jaw" id="jaw" viewBox="0 0 240 48" aria-hidden="true">
+            <rect x="4" y="6" width="232" height="36" rx="10" fill="#0b0f16" stroke="#2a364a"/>
+            <rect id="jaw-fill" x="14" y="14" width="40" height="20" rx="6" fill="#64748b"/>
           </svg>
           <div class="state-name" id="mad-state">RETRACTED</div>
-          <div class="state-sub" id="mad-sub">Waiting for fire_now ? threshold</div>
+          <div class="state-sub" id="mad-sub">Waiting for fire_now above threshold</div>
         </div>
         <div class="card">
           <h2>This clip</h2>
@@ -58,7 +57,7 @@
             <label><input type="checkbox" id="target-unsure" checked disabled /> Unsure</label>
           </div>
           <div class="oracle-note" id="oracle-note">
-            The combined model cannot distinguish event kind. Select annotation oracle for OA-only demonstrations.
+            Combined model: kind cannot be switched.
           </div>
           <div class="param-grid">
             <label>Advance (s)<input id="p-advance" type="number" min="1" max="30" value="10" /></label>
@@ -68,36 +67,40 @@
             <label>Earliest lead (s)<input id="p-lead" type="number" min="5" max="120" value="30" /></label>
           </div>
         </div>
-        <div class="card">
-          <h2>Legend</h2>
-          <div class="legend">
-            <div><span class="sw" style="background:#5ec8ff"></span>Nasal pressure (Pres)</div>
-            <div><span class="sw" style="background:#ff6b8a"></span>SpO2</div>
-            <div><span class="sw" style="background:#c4f25a"></span>Model fire_now</div>
-            <div><span class="sw" style="background:#ffb020"></span>Obstructive apnea</div>
-            <div><span class="sw" style="background:#c084fc"></span>Hypopnea / Unsure</div>
-            <div><span class="sw" style="background:#ffe08a"></span>Arousal</div>
-            <div><span class="sw" style="background:#64748b"></span>MAD advanced (hold / ignore)</div>
-          </div>
-        </div>
       </aside>
 
-      <section class="stage">
-        <div class="trace-wrap">
-          <div class="tag">Nasal airflow  |  Pres</div>
+      <section class="stage mode-stack" id="stage">
+        <div class="trace-wrap stack-only">
+          <div class="tag">Nasal airflow  |  Pres (normalized)</div>
           <div class="now-label" id="now-air">t = 00:00</div>
           <div class="veil-note" id="veil-note" style="display:none;right:18%"></div>
           <canvas id="c-air"></canvas>
         </div>
-        <div class="trace-wrap">
-          <div class="tag">SpO2</div>
+        <div class="trace-wrap stack-only">
+          <div class="tag">SpO2 (normalized)</div>
           <canvas id="c-spo2"></canvas>
         </div>
-        <div class="trace-wrap">
+        <div class="trace-wrap stack-only">
           <div class="tag" id="model-tag">Model  |  fire_now  |  active</div>
           <canvas id="c-model"></canvas>
         </div>
-        <canvas id="c-mini" style="height:28px;border-radius:8px;border:1px solid #1e2633;background:#0b0f16"></canvas>
+        <div class="trace-wrap overlay-only">
+          <div class="tag">All signals normalized 0-1  |  Pres  |  SpO2  |  fire_now</div>
+          <div class="now-label" id="now-overlay">t = 00:00</div>
+          <div class="veil-note" id="veil-note-overlay" style="display:none;right:18%"></div>
+          <canvas id="c-overlay"></canvas>
+        </div>
+        <canvas id="c-mini" style="border-radius:8px;border:1px solid #1e2633;background:#0b0f16"></canvas>
+        <div class="legend">
+          <div><span class="sw" style="background:#5ec8ff"></span>Pres</div>
+          <div><span class="sw" style="background:#ff6b8a"></span>SpO2</div>
+          <div><span class="sw" style="background:#c4f25a"></span>fire_now</div>
+          <div><span class="sw" style="background:#94a3b8"></span>active</div>
+          <div><span class="sw" style="background:#ffb020"></span>OA</div>
+          <div><span class="sw" style="background:#c084fc"></span>Hypopnea / Unsure</div>
+          <div><span class="sw" style="background:#ffe08a"></span>Arousal</div>
+          <div><span class="sw" style="background:#64748b"></span>MAD advanced (hold)</div>
+        </div>
       </section>
     </div>
 
@@ -109,6 +112,10 @@
         <option value="4">4x</option>
         <option value="8" selected>8x</option>
         <option value="16">16x</option>
+      </select>
+      <select id="layout" title="Trace layout">
+        <option value="stack" selected>Stacked lanes</option>
+        <option value="overlay">Normalized overlay</option>
       </select>
       <button id="btn-burst">Jump to burst</button>
       <button id="btn-reset">Reset</button>

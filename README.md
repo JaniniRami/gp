@@ -35,7 +35,25 @@ python server.py
 
 The site opens at [http://127.0.0.1:8765](http://127.0.0.1:8765).
 
-Presenter path: **Jump to burst** ? **Play** at 8x ? watch `fire_now` cross the threshold ? MAD ADVANCING (10 s) ? gray HOLD through the cluster ? retract when quiet.
+Presenter path: **Jump to burst** -> **Play** at 8x -> watch `fire_now` cross the threshold -> MAD ADVANCING (10 s) -> gray HOLD through the cluster -> retract when quiet.
+
+### Screen layout
+
+The dashboard is sized to the browser viewport, so everything (traces, mini
+timeline, legend, policy card, transport bar) stays on one screen with no
+scrolling on a 13" MacBook Air.
+
+Every trace is normalized once per clip using robust percentiles (0.5-99.5 for
+nasal pressure, SpO2 capped at 100), so the vertical scale never jumps while
+the trace scrolls. The real range in use is printed in the bottom-left of each
+lane.
+
+Two layouts, selectable in the transport bar or with a URL parameter
+(`/?layout=overlay`):
+
+- **Stacked lanes** (default): Pres, SpO2, and model heads in their own lanes.
+- **Normalized overlay**: all four series on one shared 0-1 axis in a single
+  lane, with the threshold line as a common reference.
 
 ### Change the controller policy
 
