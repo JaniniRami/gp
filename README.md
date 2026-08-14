@@ -4,6 +4,12 @@ Presentation replay of the MESA MAD controller on **subject-held-out** night cli
 
 The browser plays nasal pressure + SpO2 as a live scrolling PSG. The **fire_now** head (deployable, no hypnogram-wake features) drives the same 1 Hz control loop used in the paper stack: 10 s advance, 60 s refractory, hold-through-burst, then retract. When the MAD advances, the traces go gray -- the device is already out, so we stop looking for a new fire.
 
+The gray band covers both mechanical states, and the note names which one you are
+looking at: **ADVANCING** while the motor is still travelling (the jaw is *not* forward
+yet, this is the 10 s the `A = 10 s` deadline accounts for) and **HOLD** once it is
+forward. If `fire_now` crosses the threshold and the jaw does not move, the Actuator
+card says why: scored wake gating or the 60 s refractory.
+
 Nothing to the right of the cursor is drawn: signals, scored events, and arousals appear only once the replay reaches them, so the audience never sees the apnea before the model reacts to it.
 
 **This is untreated PSG.** Coverage means the advance completed before the arousal deadline. It does not mean the event or arousal was prevented.

@@ -1,6 +1,7 @@
 /* ProactMAD live-replay UI: PSG traces + fire_now + MAD controller + ESP. */
 
 const HOLD = 0, ADVANCE = 1, RETRACT = 2;
+const BLOCK_NONE = 0, BLOCK_REFRACTORY = 1, BLOCK_WAKE = 2;
 const RETRACTED = 0, ADVANCING = 1, ADVANCED = 2, RETRACTING = 3;
 const POS_NAME = ["RETRACTED", "ADVANCING", "ADVANCED", "RETRACTING"];
 
@@ -22,6 +23,8 @@ class MadController {
     this.nAdvances = 0;
     this.advancedMask = [];
     this.actions = [];
+    this.positions = [];
+    this.blocked = [];
   }
   step(t, prob, wake = false, hold = false) {
     const dt = this.advancedMask.length ? Math.max(0, t - this.t) : 1;
@@ -44,10 +47,18 @@ class MadController {
     const highRisk = !wake && prob >= this.threshold;
     if (highRisk || (hold && alreadyOut)) this.quietTimer = 0;
     else this.quietTimer += dt;
-    const canAdvance =
-      this.position === RETRACTED &&
-      t - this.lastAdvanceT >= this.refractorySec &&
-      !wake;
+    const refractory = t - this.lastAdvanceT < this.refractorySec;
+    const canAdvance = this.position === RETRACTED && !refractory && !wake;
+    // Why a fire did not move the jaw, so the UI can say it out loud.
+    this.blocked.push(
+      this.position === RETRACTED && prob >= this.threshold
+        ? wake
+          ? BLOCK_WAKE
+          : refractory
+            ? BLOCK_REFRACTORY
+            : BLOCK_NONE
+        : BLOCK_NONE,
+    );
     if (canAdvance && highRisk) {
       this.position = ADVANCING;
       this.posTimer = 0;
@@ -62,6 +73,11 @@ class MadController {
     const isAdv = this.position === ADVANCED || this.position === ADVANCING;
     this.advancedMask.push(isAdv);
     this.actions.push(action);
+    // Exact mechanical state for this second. advancedMask is the control
+    // commitment (it goes true the instant travel starts, which is what the
+    // A=10 s deadline already accounts for); the jaw is only really forward
+    // once the motor has finished, so the UI must not conflate the two.
+    this.positions.push(this.position);
     return action;
   }
   simulate(probs, wake, holds) {
@@ -72,6 +88,8 @@ class MadController {
     return {
       advanced: this.advancedMask.slice(),
       actions: this.actions.slice(),
+      positions: this.positions.slice(),
+      blocked: this.blocked.slice(),
       nAdvances: this.nAdvances,
     };
   }
@@ -198,7 +216,7 @@ function drawGrid(ctx, w, h, color = "#e8edf4") {
 let pack = null;
 let clipIndex = []; // example library: one entry per presentation story
 let ctrl = new MadController();
-let sim = { advanced: [], actions: [], nAdvances: 0 };
+let sim = { advanced: [], actions: [], positions: [], blocked: [], nAdvances: 0 };
 let simVersion = 0;
 let controllerProbs = [];
 let tNow = 0;
@@ -576,20 +594,14 @@ function coverageNow() {
 
 function updateHud() {
   const i = Math.min(sim.advanced.length - 1, Math.max(0, Math.floor(tNow)));
-  const pos = (() => {
-    // reconstruct coarse position from mask + last action
-    if (i < 0) return RETRACTED;
-    const adv = sim.advanced[i];
-    const act = sim.actions[i];
-    if (act === ADVANCE) return ADVANCING;
-    if (act === RETRACT) return RETRACTING;
-    return adv ? ADVANCED : RETRACTED;
-  })();
+  const pos =
+    sim.positions && sim.positions[i] != null ? sim.positions[i] : RETRACTED;
   $("mad-state").textContent = POS_NAME[pos];
   $("pill-mad").textContent = advLabel(pos);
   $("pill-mad").classList.toggle("adv", pos === ADVANCED || pos === ADVANCING);
   const fusedNow = fuseHeads(i, ctrl.threshold);
   if (pack.wake && pack.wake[i] && fusedNow.want) fusedNow.mode = "wake-gated";
+  const blockedNow = sim.blocked && sim.blocked[i] != null ? sim.blocked[i] : BLOCK_NONE;
   const predictionTime = fmt(i);
   $("m-raw").textContent = fusedNow.fire == null ? "unscored" : fusedNow.fire.toFixed(3);
   $("m-raw-time").textContent = `@ ${predictionTime}`;
@@ -639,13 +651,15 @@ function updateHud() {
           ? "Motor retracting"
           : fusedNow.mode === "unscored"
             ? "No 1 Hz score (lookback or hard artifact)"
-            : fusedNow.mode === "mismatch"
-              ? "pre_onset high, fire_now low -- not actuating"
-              : fusedNow.mode === "wake-gated"
-                ? "Heads high, wake-gated -- not actuating"
-              : fusedNow.want
-                ? "fire_now above threshold"
-                : "Monitoring nasal pressure + SpO2";
+            : blockedNow === BLOCK_WAKE
+              ? "fire_now high, but scored wake -- gated, jaw stays home"
+              : blockedNow === BLOCK_REFRACTORY
+                ? "fire_now high, but inside the 60 s refractory -- jaw stays home"
+                : fusedNow.mode === "mismatch"
+                  ? "pre_onset high, fire_now low -- not actuating"
+                  : fusedNow.want
+                    ? "fire_now above threshold"
+                    : "Monitoring nasal pressure + SpO2";
   const jaw = $("jaw-fill");
   const x = pos === RETRACTED ? 14 : pos === ADVANCED ? 186 : 100;
   jaw.setAttribute("x", String(x));
@@ -737,7 +751,11 @@ function drawAdvanced(ctx, h, tLeft, tRight, w, now, veilNoteId = null) {
     ctx.fillStyle = grd;
     ctx.fillRect(xNow, 0, Math.max(0, w - xNow), h);
     note.style.display = "block";
-    note.textContent = "HOLD - not looking ahead";
+    // The jaw is not forward yet during travel; say so instead of "HOLD".
+    note.textContent =
+      sim.positions && sim.positions[i] === ADVANCING
+        ? "ADVANCING - motor moving, jaw not forward yet"
+        : "HOLD - not looking ahead";
   } else {
     note.style.display = "none";
   }
