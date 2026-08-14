@@ -36,6 +36,7 @@ from mesa_mad.splits import hash_stable_split  # noqa: E402
 
 NIGHT_PACK_HZ = 8.0  # a whole night at 16 Hz is a needlessly large browser payload
 WAKE_PAD_SEC = 300  # keep a few minutes of lights-on either side of scored sleep
+SLEEP_WIN_SEC = 600  # sleep must hold over this window to count as the night edge
 MIN_NIGHT_SEC = 4 * 3600
 MAX_NIGHT_SEC = 11 * 3600
 
@@ -99,11 +100,29 @@ def story_for(sid: str, story: bc.Story, ahi: float | None) -> bc.Story:
 
 
 def sleep_span(wake: np.ndarray) -> tuple[int, int]:
-    asleep = np.flatnonzero(~np.asarray(wake, dtype=bool))
-    if asleep.size < 600:
-        return 0, int(wake.size)
-    t0 = max(0, int(asleep[0]) - WAKE_PAD_SEC)
-    t1 = min(int(wake.size), int(asleep[-1]) + WAKE_PAD_SEC)
+    """Recording span worth replaying: first to last sustained sleep, plus pad.
+
+    A single scored sleep epoch in the middle of the morning is enough to stretch
+    the span to the end of the recording (MESA 3901: 4.6 h of post-sleep wake,
+    where the cannula reads movement artifact tens of times larger than quiet
+    breathing and there is nothing for the controller to do). Require sleep to
+    hold over a window instead. Interior wake is kept: fragmented sleep is real,
+    and the events after a long awakening still belong to the night.
+    """
+    w = np.asarray(wake, dtype=bool)
+    if (~w).sum() < 600 or w.size <= SLEEP_WIN_SEC:
+        return 0, int(w.size)
+    cum = np.concatenate([[0.0], np.cumsum((~w).astype(np.float64))])
+    half = SLEEP_WIN_SEC // 2
+    i = np.arange(w.size)
+    lo = np.clip(i - half, 0, w.size)
+    hi = np.clip(i + half, 0, w.size)
+    frac = (cum[hi] - cum[lo]) / np.maximum(hi - lo, 1)
+    held = np.flatnonzero(frac >= 0.5)
+    if held.size == 0:
+        return 0, int(w.size)
+    t0 = max(0, int(held[0]) - WAKE_PAD_SEC)
+    t1 = min(int(w.size), int(held[-1]) + WAKE_PAD_SEC)
     return t0, t1
 
 

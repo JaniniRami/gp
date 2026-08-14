@@ -73,18 +73,25 @@ stays out and the advance/retract cycle is hard to see. Pick **Whole night, mild
 severity** for a night with enough quiet between clusters that each actuation is a
 separate, visible decision.
 
-| Night | NSRR AHI | Arousal-linked covered | Advances | Night advanced | SpO? nadir |
+| Night | NSRR AHI | Arousal-linked covered | Advances | Night advanced | SpO2 nadir |
 |---|---|---|---|---|---|
-| MESA 3901, 8.9 h | 5.8 (mild) | 12/14 | 15 (15 retracts) | 19% (fixed MAD = 100%) | 91% |
+| MESA 3901, 4.2 h | 5.8 (mild) | 12/14 | 15 | 40% (fixed MAD = 100%) | 91% |
 
-This is the honest deployable grid: 99.1% of the span scored at 1 Hz, the remaining
-0.9% being the 600 s lookback at the start (drawn as a gap, not a zero). Two linked
-events are missed ù worth showing rather than hiding.
+Every second of this span is scored at 1 Hz (the 600 s lookback is trimmed off the
+front rather than drawn as a gap). Two linked events are missed - worth showing
+rather than hiding.
 
-Caveats to state if asked: this night is **hypopnea-dominated** (only 1 scored
-obstructive apnea), so use MESA 2934 for the OA story, and it carries a lot of scored
-WASO (55% of the span is wake), which is why the jaw is home so much of the recording.
-MESA 3901 was chosen as a severity example, not as the top-ranked night.
+The span is the sustained sleep period, not the whole recording. This subject stays
+in bed awake for 4.6 h after the last sleep epoch, and that tail used to be included:
+it added nothing for the controller and its movement artifact is tens of times larger
+than quiet breathing, which flattened the entire sleeping night into a straight line
+on screen. `sleep_span` now requires sleep to hold over a 10 min window before it
+counts as the edge of the night, so a single stray sleep epoch in the morning cannot
+stretch the span. All 28 events survive the trim; interior wake is kept.
+
+Caveat to state if asked: this night is **hypopnea-dominated** (only 1 scored
+obstructive apnea), so use MESA 2934 for the OA story. MESA 3901 was chosen as a
+severity example, not as the top-ranked night.
 
 ## Example library
 
@@ -195,11 +202,28 @@ The dashboard is sized to the browser viewport, so everything (traces, clip map,
 legend, policy card, control rows) stays on one screen with no scrolling on a
 13" MacBook Air.
 
-Every trace is normalized once per clip using robust percentiles (0.5-99.5 for
-nasal pressure, SpO2 capped at 100), so the vertical scale never jumps while
-the trace scrolls. The real range in use is printed in the bottom-left of each
-lane. Pulse-ox dropout (SpO2 below 50%) is left as a gap rather than drawn as a
-desaturation, and never sets the range.
+Every trace is normalized once per clip, so the vertical scale never jumps while
+the trace scrolls, and the real range in use is printed in the bottom-left of
+each lane.
+
+Nasal pressure is scaled off a **typical breath**, not off the extremes: the
+1-99 percentile spread of each 30 s block, median over the blocks that are mostly
+scored sleep, stretched so that breath fills about 62% of the lane. Percentile
+scaling of the raw channel does not survive real recordings - awake breathing and
+movement artifact run tens of times larger than quiet breathing, so a handful of
+those seconds pushes the whole sleeping night into a flat line (this is what made
+the mild night look dead before the 4.6 h awake tail was trimmed). Excursions past
+the lane clip at the edge, where they still read as saturation; that is 0-2% of
+sleep samples on the story clips and about 7% on the mild night, all of it
+movement artifact.
+
+SpO2 uses percentiles (0.1 to max, capped at 100) over the **sleep** samples only;
+the floor is deliberately that low so the true nadir stays inside the lane instead
+of flattening against the bottom edge.
+Pulse-ox dropout (below 50%) is left as a gap rather than drawn as a desaturation,
+and never sets the range. A flat SpO2 trace on the mild night is real: that night's
+interquartile range is 1% and it never goes below 90%, which is what mild disease
+with arousal-dominated events looks like. Do not read it as a scaling bug.
 
 Each lane also draws its own labelled reference line, so the normalization does
 not hide where the meaningful level is:

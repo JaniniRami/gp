@@ -276,6 +276,54 @@ function spo2Valid(v) {
   return v >= 50 && v <= 100;
 }
 
+// Share of the lane a typical breath should use. Nasal pressure cannot be scaled
+// off its extremes: awake breathing and movement artifact run tens of times
+// larger than quiet breathing (MESA 3901 ends with hours of post-sleep wake), and
+// a percentile range built from those seconds flattens the sleeping night into a
+// straight line. Scale off the breath instead and let the big excursions clip at
+// the lane edge, where they are still visible as saturation.
+const BREATH_LANE_FILL = 0.62;
+const BREATH_BLOCK_SEC = 30;
+
+function medianOf(list) {
+  if (!list.length) return 0;
+  return quantile(Float64Array.from(list).sort(), 0.5);
+}
+
+function breathRange(values, fs, wake) {
+  const n = Math.max(1, Math.round(fs * BREATH_BLOCK_SEC));
+  const nBlocks = Math.floor(values.length / n);
+  if (nBlocks < 3) return robustRange(values);
+  const asleep = (b) => {
+    if (!wake || !wake.length) return true;
+    let awake = 0;
+    let secs = 0;
+    for (let s = b * BREATH_BLOCK_SEC; s < (b + 1) * BREATH_BLOCK_SEC && s < wake.length; s++) {
+      secs += 1;
+      if (wake[s]) awake += 1;
+    }
+    return secs === 0 || awake / secs < 0.5;
+  };
+  let nSleep = 0;
+  for (let b = 0; b < nBlocks; b++) if (asleep(b)) nSleep += 1;
+  const sleepOnly = nSleep >= 6;
+  const amps = [];
+  const mids = [];
+  const block = new Float64Array(n);
+  for (let b = 0; b < nBlocks; b++) {
+    if (sleepOnly && !asleep(b)) continue;
+    for (let i = 0; i < n; i++) block[i] = values[b * n + i];
+    const sorted = block.slice().sort();
+    amps.push(quantile(sorted, 0.99) - quantile(sorted, 0.01));
+    mids.push(quantile(sorted, 0.5));
+  }
+  const amp = medianOf(amps);
+  if (!(amp > 0)) return robustRange(values);
+  const span = amp / BREATH_LANE_FILL;
+  const mid = medianOf(mids);
+  return { lo: mid - span / 2, hi: mid + span / 2 };
+}
+
 function unitOf(value, range) {
   const u = (value - range.lo) / (range.hi - range.lo);
   return Math.min(1, Math.max(0, u));
@@ -822,7 +870,12 @@ function drawAir(tLeft, tRight, now) {
     w,
     h,
   });
-  drawScaleHint(ctx, h, `scale ${NORM.pres.lo.toFixed(2)} .. ${NORM.pres.hi.toFixed(2)}   0 = no flow`);
+  drawScaleHint(
+    ctx,
+    h,
+    `breath scale ${NORM.pres.lo.toFixed(2)} .. ${NORM.pres.hi.toFixed(2)}   ` +
+      `0 = no flow   artifact clips at the edge`,
+  );
   drawNow(ctx, h, tLeft, tRight, w, now);
 }
 
@@ -969,7 +1022,7 @@ function drawOverlay(tLeft, tRight, now) {
   drawScaleHint(
     ctx,
     h,
-    `Pres ${NORM.pres.lo.toFixed(2)}..${NORM.pres.hi.toFixed(2)}   ` +
+    `Pres breath ${NORM.pres.lo.toFixed(2)}..${NORM.pres.hi.toFixed(2)}   ` +
       `SpO2 ${NORM.spo2.lo.toFixed(1)}..${NORM.spo2.hi.toFixed(1)}%   prob 0..1`,
   );
   drawNow(ctx, h, tLeft, tRight, w, now);
@@ -1456,9 +1509,14 @@ async function loadClip(id) {
     speed = isNightClip() ? 60 : 8;
     $("speed").value = String(speed);
   }
-  NORM.pres = robustRange(pack.pres);
-  const spo2Clean = pack.spo2.filter(spo2Valid);
-  const spo2Range = robustRange(spo2Clean.length ? spo2Clean : pack.spo2, 0.01, 1.0, 0.05);
+  NORM.pres = breathRange(pack.pres, pack.fs_pres, pack.wake);
+  // Awake seconds also distort the SpO2 window (motion artifact, sensor off),
+  // so prefer sleep for the range and fall back when the clip has little sleep.
+  const spo2Sleep = pack.spo2.filter((v, i) => spo2Valid(v) && !(pack.wake && pack.wake[i]));
+  const spo2Clean = spo2Sleep.length >= 300 ? spo2Sleep : pack.spo2.filter(spo2Valid);
+  // Keep the true nadir inside the lane: a 1st-percentile floor clips it by up to
+  // 4% on the deep-desaturation clip, and the nadir is a number we quote.
+  const spo2Range = robustRange(spo2Clean.length ? spo2Clean : pack.spo2, 0.001, 1.0, 0.05);
   NORM.spo2 = { lo: Math.max(50, spo2Range.lo), hi: Math.min(100, spo2Range.hi) };
   applyPolicy(entry ? entry.policy : null);
   paintStory(entry);
