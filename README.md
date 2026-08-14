@@ -124,6 +124,28 @@ advances started for the event in question (within 60 s of onset); events that w
 already covered by an earlier hold are reported as `held`, so hold-through is never
 sold as prediction.
 
+The green **raw fire_now (1 Hz)** readout shows the unmodified model probability and
+the exact replay second (`0.985 @ 46:18`). The model lane is a one-second staircase
+with one dot per prediction, rather than a smoothed curve. It always remains the raw
+model output: in annotation-oracle mode, the separate controller input is drawn as a
+dashed amber trace and does not replace the green model scores.
+
+Only **OSA-linked arousals** are drawn on the traces, as dashed gold lines labeled
+`LINKED AROUSAL`. Spontaneous, movement-related and otherwise non-respiratory arousals
+remain hidden so they are not mistaken for controller failures. The **This clip** card
+keeps the original PSG comparison visible:
+
+- MESA 2934 has **215 total scored arousals**.
+- **100 unique arousal episodes** are linked to the 104 target-event links (four
+  arousals are shared by two events).
+- The MAD is **covered in time for 98** linked arousal episodes and **misses 2**.
+- The headline `102/104` remains event-link coverage; `98/100` is unique-arousal
+  coverage.
+
+“Covered in time” means advancement completed before the arousal deadline. Because the
+recording is untreated PSG, it is not evidence that those 98 arousals were actually
+avoided.
+
 URL parameters for a preset opening state: `/?clip=burst_hold`, `/?t=660` (jump to a
 second in the clip), `/?layout=overlay`, `/?play=1`, `/?speed=16`. They combine, so
 `/?clip=oa_lead&t=430&speed=4` opens exactly on the advance you want to talk about, and
@@ -217,7 +239,10 @@ Server endpoints used by the UI: `GET /api/esp/status` (link state, last reply, 
 - **Dropped:** `cs_t_since_wake`, `cs_wake_frac_10m` (PSG hypnogram wake is not available on a real MAD).
 - Held-out MESA test, 1 Hz grid: fire_now AUROC **0.851**.
 
-The website uses **precomputed 1 Hz scores** from those weights so the M4 stays smooth. Threshold can still be moved live; the JS control loop re-runs instantly.
+The website uses **precomputed raw 1 Hz probabilities** from those weights so the M4
+stays smooth. It displays each value to three decimal places with its exact decision
+second. Threshold can still be moved live; it changes the controller decision but not
+the raw model probability.
 
 Rebuilding the whole-night clip (needs the MESA caches): `python _build_night.py`. It
 ranks every held-out night, prints the top candidates and the cohort medians, and writes

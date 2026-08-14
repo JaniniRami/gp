@@ -275,6 +275,18 @@ input[type=range] { width: 108px; }
   border-bottom: 1px dashed #e2e8f0;
 }
 .metric b { font-family: "IBM Plex Mono", monospace; font-weight: 500; }
+.raw-metric {
+  color: #3f6212;
+  background: #f7fee7;
+  margin: 0 -5px;
+  padding: 4px 5px;
+  border-radius: 6px;
+  border-bottom: 0;
+}
+.raw-metric b { font-size: 14px; font-weight: 600; }
+.raw-metric small { font-size: 9px; color: #64748b; font-weight: 500; }
+.arousal-result b { color: #3f6212; font-weight: 600; }
+.arousal-result #m-arousal-missed { color: #b91c1c; }
 .disclaimer {
   margin: 0;
   color: #94a3b8;
@@ -400,6 +412,25 @@ canvas { width: 100%; height: 100%; display: block; }
   color: var(--text);
   z-index: 2;
 }
+.raw-prediction {
+  position: absolute;
+  top: 5px;
+  right: 10px;
+  z-index: 3;
+  display: flex;
+  align-items: baseline;
+  gap: 7px;
+  padding: 3px 7px;
+  border: 1px solid #bef264;
+  border-radius: 7px;
+  background: rgba(247, 254, 231, 0.94);
+  color: #3f6212;
+  font-family: "IBM Plex Mono", monospace;
+  pointer-events: none;
+}
+.raw-prediction span { font-size: 9px; letter-spacing: 0.08em; }
+.raw-prediction b { font-size: 17px; line-height: 1; }
+.raw-prediction small { font-size: 9px; color: #64748b; }
 .veil-note {
   position: absolute;
   top: 50%;
@@ -424,6 +455,10 @@ canvas { width: 100%; height: 100%; display: block; }
 }
 .sw { display: inline-block; width: 9px; height: 9px; border-radius: 2px; margin-right: 5px; vertical-align: -1px; }
 .cold-sw { background: var(--cold); border-radius: 50%; }
+.linked-arousal-sw {
+  background: repeating-linear-gradient(90deg, #eab308 0 3px, transparent 3px 5px);
+  border: 1px solid #eab308;
+}
 
 @media (max-width: 1560px) {
   .brand span { display: none; }
@@ -433,9 +468,9 @@ canvas { width: 100%; height: 100%; display: block; }
 @media (max-height: 840px) {
   /* the story banner carries the policy explanation on short screens */
   .oracle-note { display: none; }
-  .disclaimer { font-size: 9px; line-height: 1.35; }
+  .disclaimer { display: none; }
   .bar { height: 42px; }
-  .side { gap: 7px; padding: 9px; }
+  .side { gap: 7px; padding: 8px 9px; }
   .card { padding: 8px 10px; }
   .card h2 { margin-bottom: 6px; }
   .jog { margin-top: 6px; }

@@ -88,10 +88,20 @@
         </div>
         <div class="card">
           <h2>This clip</h2>
-          <div class="metric"><span>controller input</span><b id="m-p">0.00</b></div>
+          <div class="metric raw-metric" title="Unmodified fire_now model probability at the current 1 Hz decision second. This remains the model output even when the controller uses annotation oracle mode.">
+            <span>raw fire_now (1 Hz)</span>
+            <b><span id="m-raw">0.000</span> <small id="m-raw-time">@ 00:00</small></b>
+          </div>
+          <b id="m-p" hidden>0.000</b>
           <div class="metric"><span>advances</span><b id="m-adv">0</b></div>
           <div class="metric"><span>time advanced</span><b id="m-frac">0%</b></div>
-          <div class="metric"><span>events covered</span><b id="m-cov">--</b></div>
+          <div class="metric" title="Unique scored arousal episodes linked to OA, hypopnea or Unsure, compared with every scored arousal in the original PSG.">
+            <span>linked / all arousals</span><b id="m-arousal-total">--</b>
+          </div>
+          <div class="metric arousal-result" title="Linked arousals reached so far. Covered means the MAD completed advancement before the event's arousal deadline; untreated PSG cannot prove the arousal was avoided.">
+            <span>covered / missed</span><b><span id="m-arousal-covered">0</span> / <span id="m-arousal-missed">0</span></b>
+          </div>
+          <b id="m-cov" hidden>--</b>
           <div class="metric" title="Median seconds between the jaw being fully advanced and the next onset, over covered events so far. Includes events covered by an ongoing hold.">
             <span>in place before onset</span><b id="m-lead">--</b>
           </div>
@@ -146,11 +156,14 @@
           <canvas id="c-spo2"></canvas>
         </div>
         <div class="trace-wrap stack-only">
-          <div class="tag" id="model-tag">Model  |  fire_now  |  active</div>
+          <div class="tag" id="model-tag">Raw model output (1 Hz)  |  fire_now  |  active</div>
+          <div class="raw-prediction" id="raw-prediction">
+            <span>RAW fire_now</span><b id="raw-p-value">0.000</b><small id="raw-p-time">t=00:00</small>
+          </div>
           <canvas id="c-model"></canvas>
         </div>
         <div class="trace-wrap overlay-only">
-          <div class="tag">All signals normalized 0-1  |  Pres  |  SpO2  |  fire_now</div>
+          <div class="tag">All signals normalized 0-1  |  Pres  |  SpO2  |  raw fire_now (1 Hz)</div>
           <div class="now-label" id="now-overlay">t = 00:00</div>
           <div class="veil-note" id="veil-note-overlay" style="display:none;right:18%"></div>
           <canvas id="c-overlay"></canvas>
@@ -163,7 +176,7 @@
           <div><span class="sw" style="background:#64748b"></span>active</div>
           <div><span class="sw" style="background:#d97706"></span>OA</div>
           <div><span class="sw" style="background:#9333ea"></span>Hypopnea / Unsure</div>
-          <div><span class="sw" style="background:#ca8a04"></span>Arousal</div>
+          <div><span class="sw linked-arousal-sw"></span>OSA-linked arousal</div>
           <div><span class="sw" style="background:#94a3b8"></span>MAD advanced (hold)</div>
           <div><span class="sw cold-sw"></span>Cold start (cluster-first)</div>
         </div>

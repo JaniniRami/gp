@@ -283,6 +283,43 @@ function policyEvents(events) {
   return events.filter((event) => kinds.has(event.kind));
 }
 
+// Several target events can share one scored arousal. Group by the annotation
+// timestamp so the UI counts and draws arousal episodes, not event-arousal links.
+function linkedArousalGroups() {
+  const groups = new Map();
+  for (const event of policyEvents(pack.events)) {
+    if (!event.arousal_linked || event.arousal_start == null) continue;
+    const key = Number(event.arousal_start).toFixed(1);
+    if (!groups.has(key)) {
+      groups.set(key, { start: Number(event.arousal_start), events: [] });
+    }
+    groups.get(key).events.push(event);
+  }
+  return [...groups.values()].sort((a, b) => a.start - b.start);
+}
+
+function linkedArousalSummary(now = pack.duration_sec) {
+  const groups = linkedArousalGroups();
+  let reached = 0;
+  let covered = 0;
+  const lag = $("policy-source").value === "oracle" ? numberParam("p-lag", 10) : 10;
+  const lead = $("policy-source").value === "oracle" ? numberParam("p-lead", 30) : 30;
+  for (const group of groups) {
+    if (group.start > now) continue;
+    reached += 1;
+    if (group.events.some((event) => coverHit(event, sim.advanced, lag, lead) != null)) {
+      covered += 1;
+    }
+  }
+  return {
+    totalLinked: groups.length,
+    totalAll: pack.arousals.length,
+    reached,
+    covered,
+    missed: reached - covered,
+  };
+}
+
 function setEspState(state, note = "") {
   esp.state = state;
   esp.note = note;
@@ -424,8 +461,8 @@ function resim() {
   buildCumulative();
   $("thr-lab").textContent = thr.toFixed(2);
   $("model-tag").textContent = oracle
-    ? "Controller input - annotation oracle - active model"
-    : "Model - fire_now - active";
+    ? "Raw model fire_now (1 Hz) + oracle controller input + active"
+    : "Raw model output (1 Hz) - fire_now + active";
   $("pill-geo").textContent = oracle
     ? `ORACLE A=${numberParam("p-lag", 10)}s lead=${numberParam("p-lead", 30)}s`
     : "MODEL A=10s lead=30s";
@@ -497,8 +534,14 @@ function updateHud() {
   $("mad-state").textContent = POS_NAME[pos];
   $("pill-mad").textContent = advLabel(pos);
   $("pill-mad").classList.toggle("adv", pos === ADVANCED || pos === ADVANCING);
-  const p = controllerProbs[i] ?? 0;
-  $("m-p").textContent = p.toFixed(2);
+  const rawP = pack.fire_now[i] ?? 0;
+  const controllerP = controllerProbs[i] ?? 0;
+  const predictionTime = fmt(i);
+  $("m-raw").textContent = rawP.toFixed(3);
+  $("m-raw-time").textContent = `@ ${predictionTime}`;
+  $("raw-p-value").textContent = rawP.toFixed(3);
+  $("raw-p-time").textContent = `t=${predictionTime}`;
+  $("m-p").textContent = controllerP.toFixed(3);
   const advSoFar = cum.advances[i] ?? 0;
   $("m-adv").textContent = `${advSoFar} / ${sim.nAdvances}`;
   const n = sim.advanced.length;
@@ -508,6 +551,10 @@ function updateHud() {
     `${Math.round(frac * 100)}% (clip ${Math.round(fracClip * 100)}%)`;
   const c = coverageNow();
   $("m-cov").textContent = `${c.cov} / ${c.linked}`;
+  const arousal = linkedArousalSummary(tNow);
+  $("m-arousal-total").textContent = `${arousal.totalLinked} / ${arousal.totalAll}`;
+  $("m-arousal-covered").textContent = String(arousal.covered);
+  $("m-arousal-missed").textContent = String(arousal.missed);
   $("m-lead").textContent =
     c.leadMedian == null
       ? c.inherited
@@ -527,7 +574,7 @@ function updateHud() {
         ? "Motor advancing (A = 10 s)"
         : pos === RETRACTING
           ? "Motor retracting"
-          : p >= ctrl.threshold
+          : controllerP >= ctrl.threshold
             ? "fire_now above threshold"
             : "Monitoring nasal pressure + SpO2";
   const jaw = $("jaw-fill");
@@ -572,16 +619,23 @@ function drawEvents(ctx, h, tLeft, tRight, w, now) {
       ctx.fill();
     }
   }
-  ctx.strokeStyle = "#ca8a04";
-  ctx.lineWidth = 2;
-  for (const a of pack.arousals) {
-    if (a.start < tLeft || a.start > Math.min(tRight, now)) continue;
-    const x = xOf(a.start, tLeft, tRight, w);
+  // Show only arousals linked to a target respiratory event. All-arousal count
+  // remains in the sidebar for comparison with the original PSG annotation.
+  ctx.strokeStyle = "#eab308";
+  ctx.fillStyle = "#854d0e";
+  ctx.lineWidth = 2.5;
+  ctx.setLineDash([4, 3]);
+  for (const arousal of linkedArousalGroups()) {
+    if (arousal.start < tLeft || arousal.start > Math.min(tRight, now)) continue;
+    const x = xOf(arousal.start, tLeft, tRight, w);
     ctx.beginPath();
     ctx.moveTo(x, 0);
     ctx.lineTo(x, h);
     ctx.stroke();
+    ctx.font = "9px IBM Plex Sans";
+    ctx.fillText("LINKED AROUSAL", x + 3, h - 5);
   }
+  ctx.setLineDash([]);
 }
 
 function drawAdvanced(ctx, h, tLeft, tRight, w, now, veilNoteId = null) {
@@ -695,13 +749,13 @@ function drawOverlay(tLeft, tRight, now) {
 
   const unitRange = { lo: 0, hi: 1 };
   const p0 = Math.max(0, Math.floor(tLeft));
-  const p1 = Math.min(controllerProbs.length, Math.floor(Math.min(tRight, now)) + 1);
+  const p1 = Math.min(pack.fire_now.length, Math.floor(Math.min(tRight, now)) + 1);
   if (p1 > p0) {
     ctx.beginPath();
     ctx.fillStyle = "rgba(132,204,22,0.16)";
     ctx.moveTo(xOf(p0, tLeft, tRight, w), h);
     for (let i = p0; i < p1; i++) {
-      ctx.lineTo(xOf(i, tLeft, tRight, w), yOfUnit(controllerProbs[i], h));
+      ctx.lineTo(xOf(i, tLeft, tRight, w), yOfUnit(pack.fire_now[i], h));
     }
     ctx.lineTo(xOf(p1 - 1, tLeft, tRight, w), h);
     ctx.closePath();
@@ -745,7 +799,7 @@ function drawOverlay(tLeft, tRight, now) {
     h,
   });
   drawUnitSeries(ctx, {
-    values: controllerProbs,
+    values: pack.fire_now,
     fs: pack.fs_decision,
     range: unitRange,
     color: "#4d7c0f",
@@ -756,6 +810,20 @@ function drawOverlay(tLeft, tRight, now) {
     w,
     h,
   });
+  if ($("policy-source").value === "oracle") {
+    drawUnitSeries(ctx, {
+      values: controllerProbs,
+      fs: pack.fs_decision,
+      range: unitRange,
+      color: "#ca8a04",
+      width: 1.4,
+      tLeft,
+      tRight,
+      tMax: now,
+      w,
+      h,
+    });
+  }
   drawScaleHint(
     ctx,
     h,
@@ -779,7 +847,7 @@ function drawModel(tLeft, tRight, now) {
   ctx.stroke();
   ctx.setLineDash([]);
   const i0 = Math.max(0, Math.floor(tLeft));
-  const i1 = Math.min(controllerProbs.length, Math.floor(Math.min(tRight, now)) + 1);
+  const i1 = Math.min(pack.fire_now.length, Math.floor(Math.min(tRight, now)) + 1);
   if (i1 <= i0) {
     drawNow(ctx, h, tLeft, tRight, w, now);
     return;
@@ -788,8 +856,11 @@ function drawModel(tLeft, tRight, now) {
   ctx.fillStyle = "rgba(132,204,22,0.2)";
   ctx.moveTo(xOf(i0, tLeft, tRight, w), h);
   for (let i = i0; i < i1; i++) {
-    const y = h - controllerProbs[i] * (h - 8) - 4;
-    ctx.lineTo(xOf(i, tLeft, tRight, w), y);
+    const y = h - pack.fire_now[i] * (h - 8) - 4;
+    const x0 = xOf(i, tLeft, tRight, w);
+    const x1 = xOf(Math.min(i + 1, now), tLeft, tRight, w);
+    ctx.lineTo(x0, y);
+    ctx.lineTo(x1, y);
   }
   ctx.lineTo(xOf(i1 - 1, tLeft, tRight, w), h);
   ctx.closePath();
@@ -798,12 +869,41 @@ function drawModel(tLeft, tRight, now) {
   ctx.strokeStyle = "#4d7c0f";
   ctx.lineWidth = 1.8;
   for (let i = i0; i < i1; i++) {
-    const y = h - controllerProbs[i] * (h - 8) - 4;
-    const x = xOf(i, tLeft, tRight, w);
-    if (i === i0) ctx.moveTo(x, y);
-    else ctx.lineTo(x, y);
+    const y = h - pack.fire_now[i] * (h - 8) - 4;
+    const x0 = xOf(i, tLeft, tRight, w);
+    const x1 = xOf(Math.min(i + 1, now), tLeft, tRight, w);
+    if (i === i0) ctx.moveTo(x0, y);
+    else ctx.lineTo(x0, y);
+    ctx.lineTo(x1, y);
   }
   ctx.stroke();
+  // One marker per raw 1 Hz prediction when individual seconds fit on screen.
+  if (w / (tRight - tLeft) >= 5) {
+    ctx.fillStyle = "#4d7c0f";
+    for (let i = i0; i < i1; i++) {
+      const x = xOf(i, tLeft, tRight, w);
+      const y = h - pack.fire_now[i] * (h - 8) - 4;
+      ctx.beginPath();
+      ctx.arc(x, y, 2.2, 0, Math.PI * 2);
+      ctx.fill();
+    }
+  }
+  // In oracle teaching mode, keep the raw model green and show the controller's
+  // annotation-derived input separately as a dashed amber trace.
+  if ($("policy-source").value === "oracle") {
+    ctx.beginPath();
+    ctx.strokeStyle = "#ca8a04";
+    ctx.setLineDash([5, 3]);
+    ctx.lineWidth = 1.3;
+    for (let i = i0; i < i1; i++) {
+      const y = h - controllerProbs[i] * (h - 8) - 4;
+      const x = xOf(i, tLeft, tRight, w);
+      if (i === i0) ctx.moveTo(x, y);
+      else ctx.lineTo(x, y);
+    }
+    ctx.stroke();
+    ctx.setLineDash([]);
+  }
   ctx.beginPath();
   ctx.strokeStyle = "rgba(2,132,199,0.75)";
   ctx.lineWidth = 1.2;
