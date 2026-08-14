@@ -126,7 +126,13 @@ def build(night: bc.Night, stats: dict, cohort: dict) -> dict:
     pres = cache.load_pres()[int(round(t0 * fs_pres)) : int(round(t1 * fs_pres))]
     pack_pres = bc.downsample(pres, fs_pres, NIGHT_PACK_HZ)
 
-    ctrl = bc.run_ctrl(night.p_fire[t0:t1], night.wake[t0:t1])
+    ctrl = bc.run_ctrl_fused(
+        night.p_pre[t0:t1],
+        night.p_fire[t0:t1],
+        night.p_act[t0:t1],
+        night.scored[t0:t1],
+        night.wake[t0:t1],
+    )
     advanced = np.asarray(ctrl.advanced_mask, dtype=np.uint8)
     actions = np.asarray(ctrl.actions, dtype=np.int8)
 
@@ -175,11 +181,21 @@ def build(night: bc.Night, stats: dict, cohort: dict) -> dict:
             "events": "obstructive apnea + hypopnea + Unsure (MESA hyp>=30%)",
         },
         "model": {
-            "head": "fire_now",
-            "pack": "no hypnogram-wake (deployable)",
+            "heads": ["pre_onset", "fire_now", "active"],
+            "primary_trigger": "fire_now",
+            "pack": "no hypnogram-wake (deployable), 1 Hz every cannula-valid second after 600 s lookback",
             "n_features": 164,
             "test_auroc_fire_now": 0.8512,
-            "weights": "models/xgb_fire_now.joblib",
+            "weights": {
+                "pre_onset": "models/xgb_pre_onset.joblib",
+                "fire_now": "models/xgb_fire_now.joblib",
+                "active": "models/xgb_active.joblib",
+            },
+            "fusion": (
+                "Advance only if fire_now is above threshold (early-warn when pre_onset "
+                "also high; rescue when active is also high). active-only holds if already "
+                "advanced. pre_onset without fire_now does not actuate."
+            ),
         },
         "metrics": {"model": m_model, "oracle_oa": None},
         "cohort": cohort,
@@ -209,8 +225,10 @@ def build(night: bc.Night, stats: dict, cohort: dict) -> dict:
         "duration_sec": int(t1 - t0),
         "pres": [round(float(v), 3) for v in pack_pres],
         "spo2": [round(float(v), 1) for v in night.spo2[t0:t1]],
-        "fire_now": [round(float(v), 3) for v in night.p_fire[t0:t1]],
-        "active": [round(float(v), 3) for v in night.p_act[t0:t1]],
+        "fire_now": bc.prob_json(night.p_fire[t0:t1]),
+        "pre_onset": bc.prob_json(night.p_pre[t0:t1]),
+        "active": bc.prob_json(night.p_act[t0:t1]),
+        "scored": [int(v) for v in night.scored[t0:t1].astype(np.uint8)],
         "wake": [int(v) for v in night.wake[t0:t1].astype(np.uint8)],
         "advanced_default": [int(v) for v in advanced],
         "actions_default": [int(v) for v in actions],

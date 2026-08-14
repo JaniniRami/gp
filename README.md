@@ -19,8 +19,9 @@ Nothing to the right of the cursor is drawn: signals, scored events, and arousal
 | `data/clips/*.edf` | Matching 18 min excerpts (Pres 32 Hz + SpO2 1 Hz) |
 | `data/clips/index.json` | Story text, recommended policy and headline metrics per clip |
 | `data/pack.json` | Copy of the flagship 18 min clip (fallback when no clip index is readable) |
-| `models/xgb_fire_now.joblib` | Deployable `fire_now` XGB (164 features, test AUROC 0.85) |
-| `models/xgb_active.joblib` | Active-event head (shown as the cyan model trace) |
+| `models/xgb_fire_now.joblib` | Deployable `fire_now` XGB (164 features, test AUROC 0.85) ù primary MAD trigger |
+| `models/xgb_pre_onset.joblib` | Pre-onset early-warn head (not the actuation trigger) |
+| `models/xgb_active.joblib` | In-event / hold / rescue context head |
 | `firmware/drv8871_mad_control/` | ESP32 + DRV8871 sketch (IN1=27, IN2=26) |
 
 ## Whole-night replay (default clip)
@@ -31,10 +32,17 @@ single window.
 
 | Night | Arousal-linked covered | Advances | Night advanced | SpO2 nadir |
 |---|---|---|---|---|
-| MESA 2934, 7.7 h | 102/104 (98%) | 34 | 40% (fixed MAD = 100%) | 82% |
+| MESA 2934, 7.7 h | 104/104 (100%) | 13 | 67% (fixed MAD = 100%) | 82% |
 
-Severe OSA night: 119 obstructive apneas plus hypopneas, 104 of them arousal-linked, and
-the jaw is home for 60% of it.
+Severe OSA night: 119 obstructive apneas plus hypopneas, 104 of them arousal-linked.
+Every cannula-valid second after the 600 s lookback is scored at 1 Hz (`pre_onset`,
+`fire_now`, `active`). At threshold 0.55 this model is above the `fire_now` trigger for
+most of sleep, so the jaw is forward through sleep and home in scored wake (~40% of the
+recording). That is the deployable controller, not a detection overlay.
+
+The older 40% advanced / 34-advance numbers filled missing seconds with **0**. Those
+zeros were legacy Unsure pads, not model predictions. Gaps are now `null` (drawn as a
+break in the trace), never a fake zero.
 
 At **60x** the night takes about 8 min of presentation time; 120x and 240x are there if
 you only want to show the pattern. Above 16x the ESP is deliberately **not driven** (the
@@ -43,15 +51,13 @@ motor cannot track a sped-up night), and the link chip says so.
 The night map under the traces is the whole recording at a glance: hour ticks, scored
 events on the upper lane (amber OA, purple hypopnea/Unsure), the jaw state on the lower
 lane, wake in light gray, and the cursor sweeping left to right. The pattern to point at
-is short gray blocks under clusters and long clean stretches with the jaw home.
+is the jaw holding through clusters in sleep and retracting in wake.
 
-This night was picked by `_build_night.py`, which scores **every** held-out night end to
-end with the same controller and keeps the best one: coverage >= 85%, at most 40% of the
-night advanced, at least 25 arousal-linked events and 3 obstructive apneas, valid SpO2 all
-night, mostly asleep, then ranked on coverage, jaw time, event density and desaturation
-depth. It is the best of 168 scored nights (7 passed the gates), not a typical night: the
-cohort median at this threshold is 89% coverage at 40% of the night advanced, and both
-numbers are stored in the clip's `meta.cohort`.
+This night was picked by `_build_night.py` on the legacy sparse decision grid (coverage
+>= 85%, at most 40% advanced under that grid). It is still the best of 168 held-out
+nights on that ranking, not a typical night. The stored `meta.cohort` medians (89%
+coverage at 40% advanced) are from that sparse ranking, not the dense 1 Hz grid the
+player now runs.
 
 ## Example library
 
@@ -63,17 +69,17 @@ targets OA + hypopnea + Unsure, coverage counted over **arousal-linked** events 
 
 | Clip | Subject | Covered | Advances | Clip advanced | Point it makes |
 |---|---|---|---|---|---|
-| Obstructive apnea caught before onset | 3396 | 7/8 | 2 | 44% | Jaw fully forward 38 s before a cluster-first OA |
-| All events covered, jaw home most of the clip | 5103 | 6/6 | 3 | 28% | Full coverage at a quarter of a static MAD's jaw time |
-| One advance holds through a whole cluster | 5911 | 10/11 | 1 | 47% | 10 events covered by a single motor action |
-| Deep desaturations, every cluster covered | 1913 | 6/6 | 3 | 37% | SpO2 nadir 66%, every cluster covered in time |
-| Repeats: advance, retract, advance again | 1278 | 6/6 | 3 | 49% | Three independent advance/retract cycles |
+| Obstructive apnea caught before onset | 3396 | 8/8 | 2 | 94% | Jaw fully forward 38 s before a cluster-first OA |
+| All events covered | 5103 | 6/6 | 1 | 97% | Dense cluster: `fire_now` stays high through the window |
+| One advance holds through a whole cluster | 5911 | 11/11 | 1 | 57% | 11 events covered by a single motor action |
+| Deep desaturations, every cluster covered | 1913 | 6/6 | 1 | 94% | SpO2 nadir 66%, every cluster covered in time |
+| Dense cluster, one hold | 1278 | 6/6 | 1 | 98% | Watch the three heads, not a retract cycle |
 | Same clip, OA-only oracle (teaching) | 3396 | 8/8 | 2 | 57% | Ideal timing the model is asked to reproduce |
 
-These are **selected illustrative windows**, not cohort averages: the selector in
-`_build_clips.py` searches every held-out night and keeps the best window per story.
-Cohort-level numbers belong in the report, not in this demo. A conventional MAD is
-advanced 100% of the night, which is the reference for the "clip advanced" column.
+These 18 min windows sit inside event clusters, so after honest 1 Hz scoring `fire_now`
+is high for most of the clip and the jaw stays out. **Duty cycle belongs on the whole
+night**, not on a cluster excerpt. They are still useful to talk through early-warn vs
+rescue vs detect-only on a short timeline.
 
 ## Run on a Mac (M4)
 
@@ -142,7 +148,7 @@ keeps the original PSG comparison visible:
 - The headline `102/104` remains event-link coverage; `98/100` is unique-arousal
   coverage.
 
-ìCovered in timeî means advancement completed before the arousal deadline. Because the
+ùCovered in timeù means advancement completed before the arousal deadline. Because the
 recording is untreated PSG, it is not evidence that those 98 arousals were actually
 avoided.
 
@@ -234,20 +240,37 @@ Server endpoints used by the UI: `GET /api/esp/status` (link state, last reply, 
 
 ## Model (honest deployment pack)
 
-- Head: deadline `fire_now` (act in `[onset-30, (arousal|end)-10]`).
+Three 1 Hz heads, scored every cannula-valid second after the 600 s lookback
+(no hypnogram-wake features; gaps are `null`, not 0):
+
+| Head | Meaning at time t | Deployment role |
+|---|---|---|
+| `pre_onset` | Onset in the next ~30 s (before the event) | Early-warn score |
+| `fire_now` | Actuating now still beats the deadline (including after onset) | **Primary MAD trigger** |
+| `active` | Already inside an event | Confirm / hold / rescue context ù not the early-warn trigger |
+
+Fusion (threshold 0.55): advance only if `fire_now` is high. `pre_onset` + `fire_now`
+is a clean early-warn; `fire_now` + `active` is in-event rescue. `active` alone holds
+if the jaw is already out, otherwise it is too late. `pre_onset` without `fire_now`
+does not actuate. Quiet seconds retract after the quiet timer.
+
 - Features: fast nasal pressure 32 s @ 32 Hz + mid/slow + SpO2 + position + flow-morph + breath + signal-only cold-start.
 - **Dropped:** `cs_t_since_wake`, `cs_wake_frac_10m` (PSG hypnogram wake is not available on a real MAD).
 - Held-out MESA test, 1 Hz grid: fire_now AUROC **0.851**.
 
 The website uses **precomputed raw 1 Hz probabilities** from those weights so the M4
 stays smooth. It displays each value to three decimal places with its exact decision
-second. Threshold can still be moved live; it changes the controller decision but not
+second. Unscored seconds (lookback or hard cannula artifact) are drawn as a gap.
+Threshold can still be moved live; it changes the controller decision but not
 the raw model probability.
 
 Rebuilding the whole-night clip (needs the MESA caches): `python _build_night.py`. It
 ranks every held-out night, prints the top candidates and the cohort medians, and writes
 `data/clips/full_night.json` plus a merged `index.json`. Run `_build_clips.py` first if you
 are rebuilding both; each script preserves the other's entries.
+
+To refill a deployable 1 Hz grid on existing clips (fills legacy Unsure pads that
+used to be stored as fake zeros, and adds `pre_onset`): `python _rescore_dense.py`.
 
 Rebuilding the library (needs the MESA caches, not in this repo): `python _build_clips.py`
 scans every held-out night, scores each 18 min window with the same controller the browser

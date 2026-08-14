@@ -42,7 +42,9 @@ from mesa_mad.splits import hash_stable_split  # noqa: E402
 
 WAKE_DROP = ("cs_t_since_wake", "cs_wake_frac_10m")
 NIGHT_KEY = "9d41b407b51be009"
-MODEL_DIR = ROOT / "Data/mesa_runs/ablate_no_hypnogram_wake_v1"
+MODEL_DIR = Path(__file__).resolve().parent / "models"
+if not (MODEL_DIR / "xgb_fire_now.joblib").is_file():
+    MODEL_DIR = ROOT / "Data/mesa_runs/ablate_no_hypnogram_wake_v1"
 NPZ_DIR = ROOT / "Data/mesa_runs/xgb_feat_cache" / NIGHT_KEY / "nights"
 H5_DIR = ROOT / "Data/mesa_runs/cache"
 
@@ -266,6 +268,175 @@ def keep_idx_164() -> list[int]:
     return ki
 
 
+def overnight_cfg() -> MesaMadConfig:
+    """Same 166-d overnight flags the demo XGB heads were trained with."""
+    return MesaMadConfig(
+        earliest_lead_sec=LEAD,
+        actuation_lag_sec=LAG,
+        use_clean_pres=True,
+        include_instability=True,
+        include_flow_morph=True,
+        rich_spo2=True,
+        coldstart_features=True,
+        include_hypnogram_wake_feats=True,
+        include_breath_features=True,
+        include_abs_amplitude=True,
+        include_position=True,
+        include_mid_scale=True,
+        include_slow_scale=True,
+    )
+
+
+def deployable_decision_indices(bundle, cfg: MesaMadConfig) -> np.ndarray:
+    """Seconds a real MAD would score: lookback filled + cannula not hard-broken.
+
+    Training loss-masks (central/mixed, legacy Unsure pads) are NOT applied.
+    Those neighborhoods still get a 1 Hz decision on-device.
+    """
+    from mesa_mad.cache import FS_PRES
+
+    lab = bundle.labels
+    idxs = np.arange(int(lab.t_sec.size), dtype=np.int64)
+    idxs = idxs[lab.t_sec[idxs] >= float(cfg.min_decision_sec)]
+    if bundle.pres_quality is not None and bundle.use_clean_pres:
+        q = bundle.pres_quality
+        qi = np.clip((lab.t_sec[idxs] * FS_PRES).astype(np.int64), 0, q.size - 1)
+        idxs = idxs[q[qi] >= 0.3]
+    return idxs
+
+
+def extract_features_at(bundle, cfg: MesaMadConfig, idxs: np.ndarray) -> np.ndarray:
+    """Causal overnight features at 1 Hz indices. Empty idxs -> (0, n_feat)."""
+    from mesa_mad.cache import FS_PRES
+    from mesa_mad.dataset import _slice_ending_at, sample_windows_at
+    from mesa_mad.evaluate import _feat_kwargs
+    from mesa_mad.features import coldstart_context_at_indices, extract_batch
+
+    idxs = np.asarray(idxs, dtype=np.int64)
+    fkw = _feat_kwargs(cfg)
+    names = feature_names(
+        include_instability=True,
+        include_flow_morph=True,
+        rich_spo2=True,
+        coldstart_features=True,
+        include_hypnogram_wake_feats=True,
+        include_breath_features=True,
+        include_abs_amplitude=True,
+        include_position=True,
+        include_mid_scale=True,
+        include_slow_scale=True,
+    )
+    if idxs.size == 0:
+        return np.zeros((0, len(names)), dtype=np.float32)
+    lab = bundle.labels
+    Xs: list[np.ndarray] = []
+    chunk = 512
+    for start in range(0, idxs.size, chunk):
+        sl = idxs[start : start + chunk]
+        fast_l, mid_l, slow_l, spo2_l, flat_l = [], [], [], [], []
+        light_l, mid_light_l, slow_light_l = [], [], []
+        for ti in sl:
+            w = sample_windows_at(bundle, cfg, float(lab.t_sec[ti]))
+            fast_l.append(w["fast"])
+            mid_l.append(w["mid"])
+            slow_l.append(w["slow"])
+            spo2_l.append(w["spo2"])
+            flat_l.append(w["mid_flat"])
+            t = float(lab.t_sec[ti])
+            if bundle.pres_light is not None:
+                light_l.append(_slice_ending_at(bundle.pres_light, FS_PRES, t, cfg.fast_sec))
+            if bundle.mid_pres_light is not None:
+                mid_light_l.append(_slice_ending_at(bundle.mid_pres_light, cfg.mid_hz, t, cfg.mid_sec))
+            if bundle.slow_pres_light is not None:
+                slow_light_l.append(
+                    _slice_ending_at(bundle.slow_pres_light, cfg.slow_hz, t, cfg.slow_sec)
+                )
+        kw = dict(fkw)
+        kw["mid_flat"] = np.stack(flat_l)
+        if light_l and len(light_l) == len(fast_l):
+            kw["fast_light"] = np.stack(light_l)
+        if mid_light_l and len(mid_light_l) == len(fast_l):
+            kw["mid_light"] = np.stack(mid_light_l)
+        if slow_light_l and len(slow_light_l) == len(fast_l):
+            kw["slow_light"] = np.stack(slow_light_l)
+        if fkw.get("coldstart_features"):
+            kw["coldstart_context"] = coldstart_context_at_indices(bundle, sl, cfg)
+        if fkw.get("include_breath_features") and bundle.breath_t is not None:
+            from mesa_mad.breath_features import breath_feats_at_times
+
+            kw["breath_traj"] = breath_feats_at_times(
+                bundle.breath_t, bundle.breath_feats, lab.t_sec[sl]
+            )
+        if fkw.get("include_position"):
+            from mesa_mad.breath_features import position_feats_at_times
+
+            pf, _ = position_feats_at_times(bundle.pos, lab.t_sec[sl])
+            kw["pos_feats"] = pf
+        X, _ = extract_batch(
+            np.stack(fast_l), np.stack(mid_l), np.stack(slow_l), np.stack(spo2_l), **kw
+        )
+        Xs.append(X)
+    return np.concatenate(Xs, axis=0).astype(np.float32)
+
+
+def fuse_heads(
+    pre: float, fire: float, active: float, scored: bool, thr: float = THR
+) -> tuple[bool, bool, str]:
+    """Map the three 1 Hz heads onto (want_advance, hold_context, mode).
+
+    fire_now is the only actuation trigger. pre_onset is early-warn context.
+    active can hold an already-advanced jaw; it cannot start an advance alone.
+    """
+    if not scored or not np.isfinite(fire):
+        return False, False, "unscored"
+    f = float(fire) >= thr
+    p = np.isfinite(pre) and float(pre) >= thr
+    a = np.isfinite(active) and float(active) >= thr
+    if p and f and not a:
+        return True, True, "early-warn"
+    if f and a and not p:
+        return True, True, "rescue"
+    if f:
+        return True, True, "fire_now"
+    if a and not p:
+        return False, True, "detect-only"
+    if p and not f:
+        return False, False, "mismatch"
+    return False, False, "quiet"
+
+
+def run_ctrl_fused(
+    pre: np.ndarray,
+    fire: np.ndarray,
+    active: np.ndarray,
+    scored: np.ndarray,
+    wake: np.ndarray,
+    thr: float = THR,
+) -> MadController:
+    ctrl = MadController(
+        act=ActuatorConfig(
+            advance_sec=10.0, retract_sec=10.0, refractory_sec=60.0, quiet_retract_sec=90.0
+        ),
+        budget=BudgetConfig(enabled=False, init_threshold=thr),
+    )
+    ctrl.reset(0.0)
+    ctrl.threshold = thr
+    n = int(fire.size)
+    for t in range(n):
+        want, hold, _mode = fuse_heads(pre[t], fire[t], active[t], bool(scored[t]), thr)
+        awake = bool(wake[t])
+        # Scored wake already blocks new advances; it must also be allowed to
+        # accumulate quiet and retract. Holding through WASO because a head is
+        # high is not a deployable policy.
+        ctrl.step(
+            float(t),
+            float(fire[t]) if want and np.isfinite(fire[t]) else 0.0,
+            wake=awake,
+            in_burst=hold and not awake,
+        )
+    return ctrl
+
+
 def run_ctrl(probs: np.ndarray, wake: np.ndarray, thr: float = THR) -> MadController:
     ctrl = MadController(
         act=ActuatorConfig(
@@ -276,7 +447,10 @@ def run_ctrl(probs: np.ndarray, wake: np.ndarray, thr: float = THR) -> MadContro
     ctrl.reset(0.0)
     ctrl.threshold = thr
     for t in range(int(probs.size)):
-        ctrl.step(float(t), float(probs[t]), wake=bool(wake[t]))
+        v = float(probs[t])
+        if not np.isfinite(v):
+            v = 0.0
+        ctrl.step(float(t), v, wake=bool(wake[t]))
     return ctrl
 
 
@@ -296,32 +470,86 @@ class Night:
     bundle: object
     p_fire: np.ndarray
     p_act: np.ndarray
+    p_pre: np.ndarray
+    scored: np.ndarray
     wake: np.ndarray
     events: list = field(default_factory=list)
     spo2: np.ndarray | None = None
 
 
-def load_night(sid: str, fire, active, ki: list[int]) -> Night | None:
+def load_night(
+    sid: str,
+    fire,
+    active,
+    ki: list[int],
+    pre=None,
+    *,
+    dense: bool = False,
+    dense_ranges: list[tuple[int, int]] | None = None,
+) -> Night | None:
     npz = NPZ_DIR / f"{sid}.npz"
     h5 = H5_DIR / f"mesa-{sid}.h5"
     if not npz.is_file() or not h5.is_file():
         return None
     z = np.load(npz, allow_pickle=True)
-    X = np.asarray(z["X"], dtype=np.float32)[:, ki]
-    idxs = np.asarray(z["idxs"], dtype=np.int64)
-    cfg = MesaMadConfig(earliest_lead_sec=LEAD, use_clean_pres=True)
+    X_pack = np.asarray(z["X"], dtype=np.float32)
+    idxs_pack = np.asarray(z["idxs"], dtype=np.int64)
+    cfg = overnight_cfg()
     b = load_night_bundle(h5, cfg)
     n = int(b.labels.t_sec.size)
-    p_fire = np.zeros(n, dtype=np.float64)
-    p_act = np.zeros(n, dtype=np.float64)
-    p_fire[idxs] = fire.predict_proba(X)[:, 1]
-    p_act[idxs] = active.predict_proba(X)[:, 1]
+    p_fire = np.full(n, np.nan, dtype=np.float64)
+    p_act = np.full(n, np.nan, dtype=np.float64)
+    p_pre = np.full(n, np.nan, dtype=np.float64)
+    X164 = X_pack[:, ki] if X_pack.shape[1] != len(ki) else X_pack
+    p_fire[idxs_pack] = fire.predict_proba(X164)[:, 1]
+    p_act[idxs_pack] = active.predict_proba(X164)[:, 1]
+    if pre is not None:
+        p_pre[idxs_pack] = pre.predict_proba(X164)[:, 1]
+
+    if dense:
+        want = deployable_decision_indices(b, cfg)
+        if dense_ranges:
+            in_clip = np.zeros(n, dtype=bool)
+            for a, b_ in dense_ranges:
+                in_clip[max(0, int(a)) : min(n, int(b_))] = True
+            want = want[in_clip[want]]
+        have = np.zeros(n, dtype=bool)
+        have[idxs_pack] = True
+        missing = want[~have[want]]
+        if missing.size:
+            print(f"  {sid}: extracting {missing.size} deployable seconds not in the legacy pack", flush=True)
+            X_miss = extract_features_at(b, cfg, missing)
+            X_miss = X_miss[:, ki] if X_miss.shape[1] != len(ki) else X_miss
+            p_fire[missing] = fire.predict_proba(X_miss)[:, 1]
+            p_act[missing] = active.predict_proba(X_miss)[:, 1]
+            if pre is not None:
+                p_pre[missing] = pre.predict_proba(X_miss)[:, 1]
+        scored = np.isfinite(p_fire)
+    else:
+        scored = np.zeros(n, dtype=bool)
+        scored[idxs_pack] = True
+
     ann = b.cache.load_annotations()
     events = [e for e in ann.targets if e.kind in TARGET_KINDS]
     spo2 = np.asarray(b.cache.load_spo2(), dtype=np.float32)
-    return Night(sid=sid, bundle=b, p_fire=p_fire, p_act=p_act,
-                 wake=np.asarray(b.labels.wake_mask, dtype=bool),
-                 events=events, spo2=spo2)
+    return Night(
+        sid=sid,
+        bundle=b,
+        p_fire=p_fire,
+        p_act=p_act,
+        p_pre=p_pre,
+        scored=scored,
+        wake=np.asarray(b.labels.wake_mask, dtype=bool),
+        events=events,
+        spo2=spo2,
+    )
+
+
+def prob_json(arr: np.ndarray) -> list:
+    out = []
+    for v in np.asarray(arr, dtype=np.float64):
+        out.append(None if not np.isfinite(v) else round(float(v), 3))
+    return out
 
 
 def shift_events(events: list[RespEvent], t0: int, t1: int) -> list[RespEvent]:
@@ -365,7 +593,16 @@ def window_stats(night: Night, t0: int, t1: int, probs: np.ndarray | None = None
         return {"ok": False}
     sl = night.p_fire[t0:t1] if probs is None else probs
     wk = night.wake[t0:t1]
-    ctrl = run_ctrl(np.asarray(sl, dtype=np.float64), wk)
+    if probs is None:
+        ctrl = run_ctrl_fused(
+            night.p_pre[t0:t1],
+            night.p_fire[t0:t1],
+            night.p_act[t0:t1],
+            night.scored[t0:t1],
+            wk,
+        )
+    else:
+        ctrl = run_ctrl(np.asarray(sl, dtype=np.float64), wk)
     mask = np.asarray(ctrl.advanced_mask, dtype=bool)
     outs = score_coverage(ev, mask, earliest_lead=LEAD, actuation_lag=LAG)
     linked = [o for o in outs]
@@ -429,6 +666,8 @@ def window_stats(night: Night, t0: int, t1: int, probs: np.ndarray | None = None
     cold_linked = [o for o in linked if o.is_cluster_first]
     spo2 = night.spo2[t0:t1] if night.spo2 is not None else np.array([100.0])
     valid = spo2[(spo2 > 50) & (spo2 <= 100)]
+    fire_arr = np.asarray(sl, dtype=np.float64)
+    finite = fire_arr[np.isfinite(fire_arr)]
     return {
         "ok": True,
         "sid": night.sid,
@@ -468,7 +707,7 @@ def window_stats(night: Night, t0: int, t1: int, probs: np.ndarray | None = None
         "max_per_advance": int(max(per_run)) if per_run else 0,
         "spo2_min": float(np.min(valid)) if valid.size else 100.0,
         "wake_frac": float(np.mean(night.wake[t0:t1])),
-        "p95": float(np.percentile(sl, 95)),
+        "p95": float(np.percentile(finite, 95)) if finite.size else 0.0,
     }
 
 
@@ -568,11 +807,13 @@ def build_clip(story: Story, night: Night, stats: dict) -> dict:
     i0, i1 = int(round(t0 * fs_pres)), int(round(t1 * fs_pres))
     clip_pres = downsample(pres[i0:i1], fs_pres, DISPLAY_HZ)
     clip_spo2 = np.asarray(night.spo2[t0:t1], dtype=np.float32)
-    clip_fire = night.p_fire[t0:t1].astype(np.float32)
-    clip_act = night.p_act[t0:t1].astype(np.float32)
+    clip_fire = night.p_fire[t0:t1]
+    clip_act = night.p_act[t0:t1]
+    clip_pre = night.p_pre[t0:t1]
+    clip_scored = night.scored[t0:t1]
     clip_wake = night.wake[t0:t1].astype(np.uint8)
 
-    ctrl = run_ctrl(night.p_fire[t0:t1], night.wake[t0:t1])
+    ctrl = run_ctrl_fused(clip_pre, clip_fire, clip_act, clip_scored, night.wake[t0:t1])
     advanced = np.asarray(ctrl.advanced_mask, dtype=np.uint8)
     actions = np.asarray(ctrl.actions, dtype=np.int8)
 
@@ -627,11 +868,21 @@ def build_clip(story: Story, night: Night, stats: dict) -> dict:
             "events": "obstructive apnea + hypopnea + Unsure (MESA hyp>=30%)",
         },
         "model": {
-            "head": "fire_now",
-            "pack": "no hypnogram-wake (deployable)",
+            "heads": ["pre_onset", "fire_now", "active"],
+            "primary_trigger": "fire_now",
+            "pack": "no hypnogram-wake (deployable), 1 Hz every cannula-valid second after 600 s lookback",
             "n_features": 164,
             "test_auroc_fire_now": 0.8512,
-            "weights": "models/xgb_fire_now.joblib",
+            "weights": {
+                "pre_onset": "models/xgb_pre_onset.joblib",
+                "fire_now": "models/xgb_fire_now.joblib",
+                "active": "models/xgb_active.joblib",
+            },
+            "fusion": (
+                "Advance only if fire_now is above threshold (early-warn when pre_onset "
+                "also high; rescue when active is also high). active-only holds if already "
+                "advanced. pre_onset without fire_now does not actuate."
+            ),
         },
         "metrics": {"model": m_model, "oracle_oa": m_oracle},
         "controller": {
@@ -652,8 +903,10 @@ def build_clip(story: Story, night: Night, stats: dict) -> dict:
         "duration_sec": int(t1 - t0),
         "pres": [round(float(v), 4) for v in downsample(clip_pres, DISPLAY_HZ, PACK_HZ)],
         "spo2": [round(float(v), 2) for v in clip_spo2],
-        "fire_now": [round(float(v), 4) for v in clip_fire],
-        "active": [round(float(v), 4) for v in clip_act],
+        "fire_now": prob_json(clip_fire),
+        "pre_onset": prob_json(clip_pre),
+        "active": prob_json(clip_act),
+        "scored": [int(v) for v in clip_scored.astype(np.uint8)],
         "wake": [int(v) for v in clip_wake],
         "advanced_default": [int(v) for v in advanced],
         "actions_default": [int(v) for v in actions],

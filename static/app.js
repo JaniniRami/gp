@@ -23,7 +23,7 @@ class MadController {
     this.advancedMask = [];
     this.actions = [];
   }
-  step(t, prob, wake = false) {
+  step(t, prob, wake = false, hold = false) {
     const dt = this.advancedMask.length ? Math.max(0, t - this.t) : 1;
     this.t = t;
     let action = HOLD;
@@ -40,8 +40,9 @@ class MadController {
         this.posTimer = 0;
       }
     }
+    const alreadyOut = this.position === ADVANCED || this.position === ADVANCING;
     const highRisk = !wake && prob >= this.threshold;
-    if (highRisk) this.quietTimer = 0;
+    if (highRisk || (hold && alreadyOut)) this.quietTimer = 0;
     else this.quietTimer += dt;
     const canAdvance =
       this.position === RETRACTED &&
@@ -63,15 +64,66 @@ class MadController {
     this.actions.push(action);
     return action;
   }
-  simulate(probs, wake) {
+  simulate(probs, wake, holds) {
     this.reset();
-    for (let t = 0; t < probs.length; t++) this.step(t, probs[t], !!wake[t]);
+    for (let t = 0; t < probs.length; t++) {
+      this.step(t, probs[t], !!wake[t], !!(holds && holds[t]));
+    }
     return {
       advanced: this.advancedMask.slice(),
       actions: this.actions.slice(),
       nAdvances: this.nAdvances,
     };
   }
+}
+
+function isScored(t) {
+  if (!pack) return false;
+  if (pack.scored && pack.scored.length) return !!pack.scored[t];
+  const v = pack.fire_now[t];
+  return v != null && Number.isFinite(v);
+}
+
+function headAt(name, t) {
+  const arr = pack[name];
+  if (!arr) return null;
+  const v = arr[t];
+  return v == null || !Number.isFinite(v) ? null : v;
+}
+
+function fuseHeads(t, thr) {
+  if (!isScored(t)) return { want: false, hold: false, mode: "unscored", fire: null, pre: null, active: null };
+  const fire = headAt("fire_now", t);
+  const pre = headAt("pre_onset", t);
+  const active = headAt("active", t);
+  const f = fire != null && fire >= thr;
+  const p = pre != null && pre >= thr;
+  const a = active != null && active >= thr;
+  let want = false;
+  let hold = false;
+  let mode = "quiet";
+  if (p && f && !a) { want = true; hold = true; mode = "early-warn"; }
+  else if (f && a && !p) { want = true; hold = true; mode = "rescue"; }
+  else if (f) { want = true; hold = true; mode = "fire_now"; }
+  else if (a && !p) { want = false; hold = true; mode = "detect-only"; }
+  else if (p && !f) { want = false; hold = false; mode = "mismatch"; }
+  return { want, hold, mode, fire, pre, active };
+}
+
+function fusedControllerInput() {
+  const thr = Number($("thr").value) / 100;
+  const n = pack.duration_sec;
+  const probs = new Array(n);
+  const holds = new Array(n);
+  const modes = new Array(n);
+  for (let t = 0; t < n; t++) {
+    const f = fuseHeads(t, thr);
+    const awake = !!(pack.wake && pack.wake[t]);
+    probs[t] = f.want ? f.fire : 0;
+    holds[t] = f.hold && !awake;
+    modes[t] = awake && f.want ? "wake-gated" : f.mode;
+  }
+  return { probs, holds, modes };
 }
 
 const $ = (id) => document.getElementById(id);
@@ -456,19 +508,21 @@ function resim() {
   ctrl.advanceSec = numberParam("p-advance", 10);
   ctrl.refractorySec = numberParam("p-refractory", 60);
   ctrl.quietRetractSec = numberParam("p-quiet", 90);
-  controllerProbs = oracle ? oracleFireNow() : pack.fire_now;
-  sim = ctrl.simulate(controllerProbs, pack.wake);
+  const fused = fusedControllerInput();
+  controllerProbs = oracle ? oracleFireNow() : fused.probs;
+  const holds = oracle ? null : fused.holds;
+  sim = ctrl.simulate(controllerProbs, pack.wake, holds);
   buildCumulative();
   $("thr-lab").textContent = thr.toFixed(2);
   $("model-tag").textContent = oracle
-    ? "Raw model fire_now (1 Hz) + oracle controller input + active"
-    : "Raw model output (1 Hz) - fire_now + active";
+    ? "1 Hz heads + oracle controller (teaching)"
+    : "1 Hz heads: pre_onset + fire_now + active";
   $("pill-geo").textContent = oracle
     ? `ORACLE A=${numberParam("p-lag", 10)}s lead=${numberParam("p-lead", 30)}s`
-    : "MODEL A=10s lead=30s";
+    : "3-head A=10s lead=30s";
   $("pill-geo").title = oracle
     ? "Controller input from scored annotations (presentation only), deadline geometry"
-    : "fire_now head, 164 deployable features (no hypnogram wake), A=10 s, earliest lead 30 s";
+    : "pre_onset early-warn, fire_now primary trigger, active hold/rescue. Deployable 1 Hz grid, no hypnogram wake.";
   $("pill-geo").classList.toggle("adv", oracle);
   lastActionSent = -1;
   updateHud();
@@ -534,14 +588,17 @@ function updateHud() {
   $("mad-state").textContent = POS_NAME[pos];
   $("pill-mad").textContent = advLabel(pos);
   $("pill-mad").classList.toggle("adv", pos === ADVANCED || pos === ADVANCING);
-  const rawP = pack.fire_now[i] ?? 0;
-  const controllerP = controllerProbs[i] ?? 0;
+  const fusedNow = fuseHeads(i, ctrl.threshold);
+  if (pack.wake && pack.wake[i] && fusedNow.want) fusedNow.mode = "wake-gated";
   const predictionTime = fmt(i);
-  $("m-raw").textContent = rawP.toFixed(3);
+  $("m-raw").textContent = fusedNow.fire == null ? "unscored" : fusedNow.fire.toFixed(3);
   $("m-raw-time").textContent = `@ ${predictionTime}`;
-  $("raw-p-value").textContent = rawP.toFixed(3);
-  $("raw-p-time").textContent = `t=${predictionTime}`;
-  $("m-p").textContent = controllerP.toFixed(3);
+  $("m-pre").textContent = fusedNow.pre == null ? "--" : fusedNow.pre.toFixed(3);
+  $("m-act").textContent = fusedNow.active == null ? "--" : fusedNow.active.toFixed(3);
+  $("m-mode").textContent = fusedNow.mode;
+  $("raw-p-value").textContent = fusedNow.fire == null ? "--" : fusedNow.fire.toFixed(3);
+  $("raw-p-time").textContent = `${fusedNow.mode}  t=${predictionTime}`;
+  $("m-p").textContent = (controllerProbs[i] ?? 0).toFixed(3);
   const advSoFar = cum.advances[i] ?? 0;
   $("m-adv").textContent = `${advSoFar} / ${sim.nAdvances}`;
   const n = sim.advanced.length;
@@ -569,14 +626,26 @@ function updateHud() {
   $("m-duty").textContent = `${Math.round((1 - fracClip) * 100)}% less jaw time`;
   $("mad-sub").textContent =
     pos === ADVANCED
-      ? "Hold through burst -- new fires ignored"
+      ? fusedNow.mode === "rescue"
+        ? "Rescue / hold -- fire_now + active"
+        : fusedNow.mode === "detect-only"
+          ? "Hold -- active only, not a prediction fire"
+          : "Hold through burst"
       : pos === ADVANCING
-        ? "Motor advancing (A = 10 s)"
+        ? fusedNow.mode === "early-warn"
+          ? "Advancing on early-warn (pre_onset + fire_now)"
+          : "Motor advancing (A = 10 s)"
         : pos === RETRACTING
           ? "Motor retracting"
-          : controllerP >= ctrl.threshold
-            ? "fire_now above threshold"
-            : "Monitoring nasal pressure + SpO2";
+          : fusedNow.mode === "unscored"
+            ? "No 1 Hz score (lookback or hard artifact)"
+            : fusedNow.mode === "mismatch"
+              ? "pre_onset high, fire_now low -- not actuating"
+              : fusedNow.mode === "wake-gated"
+                ? "Heads high, wake-gated -- not actuating"
+              : fusedNow.want
+                ? "fire_now above threshold"
+                : "Monitoring nasal pressure + SpO2";
   const jaw = $("jaw-fill");
   const x = pos === RETRACTED ? 14 : pos === ADVANCED ? 186 : 100;
   jaw.setAttribute("x", String(x));
@@ -748,18 +817,41 @@ function drawOverlay(tLeft, tRight, now) {
   ctx.setLineDash([]);
 
   const unitRange = { lo: 0, hi: 1 };
+  const finite = (v) => v != null && Number.isFinite(v);
+  const common = { fs: pack.fs_decision, range: unitRange, tLeft, tRight, tMax: now, w, h, valid: finite };
   const p0 = Math.max(0, Math.floor(tLeft));
   const p1 = Math.min(pack.fire_now.length, Math.floor(Math.min(tRight, now)) + 1);
   if (p1 > p0) {
     ctx.beginPath();
     ctx.fillStyle = "rgba(132,204,22,0.16)";
-    ctx.moveTo(xOf(p0, tLeft, tRight, w), h);
+    let pen = false;
     for (let i = p0; i < p1; i++) {
-      ctx.lineTo(xOf(i, tLeft, tRight, w), yOfUnit(pack.fire_now[i], h));
+      if (!finite(pack.fire_now[i])) {
+        if (pen) {
+          ctx.lineTo(xOf(i - 1, tLeft, tRight, w), h);
+          ctx.closePath();
+          ctx.fill();
+          ctx.beginPath();
+          ctx.fillStyle = "rgba(132,204,22,0.16)";
+          pen = false;
+        }
+        continue;
+      }
+      const x = xOf(i, tLeft, tRight, w);
+      const y = yOfUnit(pack.fire_now[i], h);
+      if (!pen) {
+        ctx.moveTo(x, h);
+        ctx.lineTo(x, y);
+        pen = true;
+      } else {
+        ctx.lineTo(x, y);
+      }
     }
-    ctx.lineTo(xOf(p1 - 1, tLeft, tRight, w), h);
-    ctx.closePath();
-    ctx.fill();
+    if (pen) {
+      ctx.lineTo(xOf(p1 - 1, tLeft, tRight, w), h);
+      ctx.closePath();
+      ctx.fill();
+    }
   }
   drawUnitSeries(ctx, {
     values: pack.pres,
@@ -786,30 +878,11 @@ function drawOverlay(tLeft, tRight, now) {
     w,
     h,
   });
-  drawUnitSeries(ctx, {
-    values: pack.active,
-    fs: pack.fs_decision,
-    range: unitRange,
-    color: "rgba(100,116,139,0.8)",
-    width: 1.1,
-    tLeft,
-    tRight,
-    tMax: now,
-    w,
-    h,
-  });
-  drawUnitSeries(ctx, {
-    values: pack.fire_now,
-    fs: pack.fs_decision,
-    range: unitRange,
-    color: "#4d7c0f",
-    width: 2.2,
-    tLeft,
-    tRight,
-    tMax: now,
-    w,
-    h,
-  });
+  if (pack.pre_onset) {
+    drawUnitSeries(ctx, { values: pack.pre_onset, color: "#ca8a04", width: 1.3, ...common });
+  }
+  drawUnitSeries(ctx, { values: pack.active, color: "rgba(100,116,139,0.8)", width: 1.1, ...common });
+  drawUnitSeries(ctx, { values: pack.fire_now, color: "#4d7c0f", width: 2.2, ...common });
   if ($("policy-source").value === "oracle") {
     drawUnitSeries(ctx, {
       values: controllerProbs,
@@ -846,74 +919,37 @@ function drawModel(tLeft, tRight, now) {
   ctx.lineTo(w, yThr);
   ctx.stroke();
   ctx.setLineDash([]);
-  const i0 = Math.max(0, Math.floor(tLeft));
-  const i1 = Math.min(pack.fire_now.length, Math.floor(Math.min(tRight, now)) + 1);
-  if (i1 <= i0) {
-    drawNow(ctx, h, tLeft, tRight, w, now);
-    return;
+  const unitRange = { lo: 0, hi: 1 };
+  const finite = (v) => v != null && Number.isFinite(v);
+  const common = { fs: pack.fs_decision, range: unitRange, tLeft, tRight, tMax: now, w, h, valid: finite };
+  if (pack.pre_onset) {
+    drawUnitSeries(ctx, { values: pack.pre_onset, color: "#ca8a04", width: 1.4, ...common });
   }
-  ctx.beginPath();
-  ctx.fillStyle = "rgba(132,204,22,0.2)";
-  ctx.moveTo(xOf(i0, tLeft, tRight, w), h);
-  for (let i = i0; i < i1; i++) {
-    const y = h - pack.fire_now[i] * (h - 8) - 4;
-    const x0 = xOf(i, tLeft, tRight, w);
-    const x1 = xOf(Math.min(i + 1, now), tLeft, tRight, w);
-    ctx.lineTo(x0, y);
-    ctx.lineTo(x1, y);
-  }
-  ctx.lineTo(xOf(i1 - 1, tLeft, tRight, w), h);
-  ctx.closePath();
-  ctx.fill();
-  ctx.beginPath();
-  ctx.strokeStyle = "#4d7c0f";
-  ctx.lineWidth = 1.8;
-  for (let i = i0; i < i1; i++) {
-    const y = h - pack.fire_now[i] * (h - 8) - 4;
-    const x0 = xOf(i, tLeft, tRight, w);
-    const x1 = xOf(Math.min(i + 1, now), tLeft, tRight, w);
-    if (i === i0) ctx.moveTo(x0, y);
-    else ctx.lineTo(x0, y);
-    ctx.lineTo(x1, y);
-  }
-  ctx.stroke();
-  // One marker per raw 1 Hz prediction when individual seconds fit on screen.
+  drawUnitSeries(ctx, { values: pack.active, color: "rgba(100,116,139,0.9)", width: 1.2, ...common });
+  drawUnitSeries(ctx, { values: pack.fire_now, color: "#4d7c0f", width: 2.0, ...common });
   if (w / (tRight - tLeft) >= 5) {
     ctx.fillStyle = "#4d7c0f";
+    const i0 = Math.max(0, Math.floor(tLeft));
+    const i1 = Math.min(pack.fire_now.length, Math.floor(Math.min(tRight, now)) + 1);
     for (let i = i0; i < i1; i++) {
+      if (!finite(pack.fire_now[i])) continue;
       const x = xOf(i, tLeft, tRight, w);
       const y = h - pack.fire_now[i] * (h - 8) - 4;
       ctx.beginPath();
-      ctx.arc(x, y, 2.2, 0, Math.PI * 2);
+      ctx.arc(x, y, 2.0, 0, Math.PI * 2);
       ctx.fill();
     }
   }
-  // In oracle teaching mode, keep the raw model green and show the controller's
-  // annotation-derived input separately as a dashed amber trace.
   if ($("policy-source").value === "oracle") {
-    ctx.beginPath();
-    ctx.strokeStyle = "#ca8a04";
-    ctx.setLineDash([5, 3]);
-    ctx.lineWidth = 1.3;
-    for (let i = i0; i < i1; i++) {
-      const y = h - controllerProbs[i] * (h - 8) - 4;
-      const x = xOf(i, tLeft, tRight, w);
-      if (i === i0) ctx.moveTo(x, y);
-      else ctx.lineTo(x, y);
-    }
-    ctx.stroke();
-    ctx.setLineDash([]);
+    drawUnitSeries(ctx, {
+      values: controllerProbs,
+      color: "#7c3aed",
+      width: 1.3,
+      ...common,
+      valid: () => true,
+    });
   }
-  ctx.beginPath();
-  ctx.strokeStyle = "rgba(2,132,199,0.75)";
-  ctx.lineWidth = 1.2;
-  for (let i = i0; i < i1; i++) {
-    const y = h - pack.active[i] * (h - 8) - 4;
-    const x = xOf(i, tLeft, tRight, w);
-    if (i === i0) ctx.moveTo(x, y);
-    else ctx.lineTo(x, y);
-  }
-  ctx.stroke();
+  drawScaleHint(ctx, h, "gold pre_onset   green fire_now   slate active   gap = unscored");
   drawNow(ctx, h, tLeft, tRight, w, now);
 }
 
