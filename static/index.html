@@ -16,6 +16,9 @@
           <h1>PROACTMAD</h1>
           <span>live OSA actuation</span>
         </div>
+        <label class="clip-pick">clip
+          <select id="clip" title="Example clip from a held-out MESA night"></select>
+        </label>
         <div class="pills">
           <div class="pill" id="pill-sub">MESA --</div>
           <div class="pill" id="pill-split" title="test split, subject held out of training">held-out</div>
@@ -28,7 +31,7 @@
           <span class="link-rx" id="esp-rx">no reply yet</span>
         </div>
         <button id="btn-esp">Connect ESP</button>
-        <button id="btn-esp-test">Test link</button>
+        <button id="btn-esp-test" title="Send '?' and wait for the firmware reply">Test</button>
         <div class="clock" id="clock">00:00 / 12:00</div>
       </div>
 
@@ -82,10 +85,15 @@
         <div class="card">
           <h2>This clip</h2>
           <div class="metric"><span>controller input</span><b id="m-p">0.00</b></div>
-          <div class="metric"><span>threshold</span><b id="m-thr">0.55</b></div>
           <div class="metric"><span>advances</span><b id="m-adv">0</b></div>
           <div class="metric"><span>time advanced</span><b id="m-frac">0%</b></div>
           <div class="metric"><span>events covered</span><b id="m-cov">--</b></div>
+          <div class="metric" title="Median seconds between the jaw being fully advanced and the next onset, over covered events so far. Includes events covered by an ongoing hold.">
+            <span>in place before onset</span><b id="m-lead">--</b>
+          </div>
+          <div class="metric" title="A conventional MAD is advanced 100% of the night; this is how much less of the clip this device spends advanced.">
+            <span>vs static MAD</span><b id="m-duty">--</b>
+          </div>
         </div>
         <div class="card controls-card">
           <h2>Controller policy</h2>
@@ -118,6 +126,11 @@
       </aside>
 
       <section class="stage mode-stack" id="stage">
+        <div class="story">
+          <b id="story-title">--</b>
+          <span id="story-watch"></span>
+          <span class="story-num" id="story-num"></span>
+        </div>
         <div class="trace-wrap stack-only">
           <div class="tag">Nasal airflow  |  Pres (normalized)</div>
           <div class="now-label" id="now-air">t = 00:00</div>

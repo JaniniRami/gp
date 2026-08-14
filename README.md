@@ -1,6 +1,6 @@
 # ProactMAD live demo
 
-Presentation replay of the MESA MAD controller on a **subject-held-out** night clip.
+Presentation replay of the MESA MAD controller on **subject-held-out** night clips.
 
 The browser plays nasal pressure + SpO2 as a live scrolling PSG. The **fire_now** head (deployable, no hypnogram-wake features) drives the same 1 Hz control loop used in the paper stack: 10 s advance, 60 s refractory, hold-through-burst, then retract. When the MAD advances, the traces go gray -- the device is already out, so we stop looking for a new fire.
 
@@ -14,15 +14,34 @@ Nothing to the right of the cursor is drawn: signals, scored events, and arousal
 |---|---|
 | `static/` | Live-replay website |
 | `server.py` | Local server (opens the browser, optional ESP serial) |
-| `data/mesa-sleep-3481_clip.edf` | 18 min MESA excerpt (Pres 32 Hz + SpO2 1 Hz) |
-| `data/pack.json` | Waveforms, events, model scores for the UI |
+| `data/clips/*.json` | Example clip library (waveforms, events, model scores) |
+| `data/clips/*.edf` | Matching 18 min excerpts (Pres 32 Hz + SpO2 1 Hz) |
+| `data/clips/index.json` | Story text, recommended policy and headline metrics per clip |
+| `data/pack.json` | Copy of the default clip (single-clip fallback path) |
 | `models/xgb_fire_now.joblib` | Deployable `fire_now` XGB (164 features, test AUROC 0.85) |
 | `models/xgb_active.joblib` | Active-event head (shown as the cyan model trace) |
 | `firmware/drv8871_mad_control/` | ESP32 + DRV8871 sketch (IN1=27, IN2=26) |
 
-Clip: **MESA 3481**, test split, 40440-41520 s. 12 target events in **6 bursts**, 3 advances at
-threshold 0.55, 41% of the clip advanced, 8/10 arousal-linked events covered (all preemptive).
-Geometry: **A = 10 s**, earliest lead **30 s**.
+## Example library
+
+Pick a clip from the **clip** menu in the top bar. Each one is an 18 min window from a
+different held-out MESA subject, chosen automatically because it makes one specific point.
+All numbers below are at threshold 0.55, geometry **A = 10 s**, earliest lead **30 s**,
+targets OA + hypopnea + Unsure, coverage counted over **arousal-linked** events only.
+
+| Clip | Subject | Covered | Advances | Clip advanced | Point it makes |
+|---|---|---|---|---|---|
+| Obstructive apnea caught before onset | 3396 | 7/8 | 2 | 44% | Jaw fully forward 38 s before a cluster-first OA |
+| All events covered, jaw home most of the clip | 5103 | 6/6 | 3 | 28% | Full coverage at a quarter of a static MAD's jaw time |
+| One advance holds through a whole cluster | 5911 | 10/11 | 1 | 47% | 10 events covered by a single motor action |
+| Deep desaturations, every cluster covered | 1913 | 6/6 | 3 | 37% | SpO2 nadir 66%, every cluster covered in time |
+| Repeats: advance, retract, advance again | 1278 | 6/6 | 3 | 49% | Three independent advance/retract cycles |
+| Same clip, OA-only oracle (teaching) | 3396 | 8/8 | 2 | 57% | Ideal timing the model is asked to reproduce |
+
+These are **selected illustrative windows**, not cohort averages: the selector in
+`_build_clips.py` searches every held-out night and keeps the best window per story.
+Cohort-level numbers belong in the report, not in this demo. A conventional MAD is
+advanced 100% of the night, which is the reference for the "clip advanced" column.
 
 ## Run on a Mac (M4)
 
@@ -47,11 +66,12 @@ Everything lives in the two rows at the top; the page never scrolls.
 
 | Control | What it does |
 |---|---|
+| **clip** | Switches example; loads that clip and its recommended controller input |
 | **Play / Pause** | Runs the replay at the selected speed |
 | **speed** | 1x live up to 16x |
 | **Next cold start** | Seeks to **60 s before the next cluster-first event** and cycles through all of them (wraps at the end) |
 | **Next event** | Same 60 s pre-roll, but for every target event including mid-burst ones |
-| **Reset** | Back to the opening frame (first cold start with a full pre-roll and the device retracted) |
+| **Reset** | Back to the opening frame (45 s before the clip's first advance) |
 | **Stacked lanes / Normalized overlay** | Trace layout |
 | **window** | Visible time span, 30-120 s |
 | **threshold** | `fire_now` decision threshold; the controller re-simulates instantly |
@@ -59,7 +79,14 @@ Everything lives in the two rows at the top; the page never scrolls.
 The hint at the right of the control row always names the next cold start (`cold start 4/6 at 10:28`),
 and cold starts are marked with cyan triangles in the trace lanes and on the clip map.
 
-URL parameters for a preset opening state: `/?layout=overlay`, `/?play=1`, `/?speed=16`.
+The line under the traces names the clip and the point it makes, with that clip's
+headline numbers on the right (`7/8 covered | 2 adv | 44% vs 100% static`). The
+**This clip** card tracks the same quantities live as the replay advances, including
+how far ahead of each onset the jaw was already in place.
+
+URL parameters for a preset opening state: `/?clip=burst_hold`, `/?t=660` (jump to a
+second in the clip), `/?layout=overlay`, `/?play=1`, `/?speed=16`. They combine, so
+`/?clip=oa_lead&t=430&speed=4` opens exactly on the advance you want to talk about.
 
 ### Screen layout
 
@@ -85,8 +112,8 @@ target kinds, and deadline geometry.
 The default **Combined model (honest)** uses the deployable model exactly as
 trained: OA + hypopnea + Unsure. It does not output event kind separately.
 
-For an **OA-only presentation**, choose **Annotation oracle (presentation)**
-and leave only **OA** selected. Hypopnea-only, Unsure-only, and any combination
+For an **OA-only presentation**, choose the **Same clip, OA-only oracle** example (or
+pick **Annotation oracle** and leave only **OA** selected). Hypopnea-only, Unsure-only, and any combination
 work the same way. Oracle mode uses the scored event kind and is visibly
 labeled `ORACLE`; it demonstrates the policy but is not a claim that the
 real-time model can identify event kind in advance.
@@ -137,10 +164,16 @@ Server endpoints used by the UI: `GET /api/esp/status` (link state, last reply, 
 
 The website uses **precomputed 1 Hz scores** from those weights so the M4 stays smooth. Threshold can still be moved live; the JS control loop re-runs instantly.
 
-Rebuilding the clip (needs the MESA caches, not in this repo): `python _build_pack.py` writes
-`data/pack.json`, the EDF excerpt, and `data/clip_meta.json`. It scans candidate held-out nights
-and picks a window with several bursts, requiring at least `MIN_COLD_STARTS` cluster-first events.
+Rebuilding the library (needs the MESA caches, not in this repo): `python _build_clips.py`
+scans every held-out night, scores each 18 min window with the same controller the browser
+runs, and keeps the best window per story in `data/clips/`. Windows are selected on the
+**model** probabilities, never the oracle, and must open retracted so the first advance is
+visible on screen. `python _build_pack.py` is the older single-clip builder.
+
+A cold start (cluster-first event) counts as caught by a *fresh* advance only when the
+advance run began within 60 s of the onset and finished before it; leads inherited from an
+earlier hold are reported separately, so "caught before onset" never means hold-through.
 
 ## Data notice
 
-`data/mesa-sleep-3481_clip.edf` is a short derived excerpt of [MESA Sleep](https://sleepdata.org/datasets/mesa) (NSRR). Use only under your NSRR data-use agreement. Do not treat this public demo clip as a license to redistribute full nights.
+The files in `data/clips/` are short derived excerpts of [MESA Sleep](https://sleepdata.org/datasets/mesa) (NSRR). Use only under your NSRR data-use agreement. Do not treat these public demo clips as a license to redistribute full nights.

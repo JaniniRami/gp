@@ -83,15 +83,32 @@ function fmt(t) {
   return `${String(m).padStart(2, "0")}:${String(s).padStart(2, "0")}`;
 }
 
-function eventCovered(ev, advanced, A = 10, lead = 30) {
-  if (!ev.arousal_linked) return false;
+// First second inside the credit window [onset - lead, deadline] where the device
+// was already advanced (or completing an advance); null if the event was missed.
+function coverHit(ev, advanced, A = 10, lead = 30) {
+  if (!ev.arousal_linked) return null;
   const deadlineRef = ev.arousal_start != null ? ev.arousal_start : ev.end;
   const deadline = deadlineRef - A;
   const earliest = ev.start - lead;
   const i0 = Math.max(0, Math.floor(earliest));
   const i1 = Math.min(advanced.length, Math.floor(deadline) + 1);
-  for (let i = i0; i < i1; i++) if (advanced[i]) return true;
-  return false;
+  for (let i = i0; i < i1; i++) if (advanced[i]) return i;
+  return null;
+}
+
+// Start of the advance run that covered second i, so lead can be measured from
+// the moment the jaw was fully forward rather than from the credit window edge.
+function runStartAt(advanced, i) {
+  let k = i;
+  while (k > 0 && advanced[k - 1]) k -= 1;
+  return k;
+}
+
+function median(values) {
+  if (!values.length) return null;
+  const v = values.slice().sort((a, b) => a - b);
+  const mid = v.length >> 1;
+  return v.length % 2 ? v[mid] : (v[mid - 1] + v[mid]) / 2;
 }
 
 function setupCanvas(c) {
@@ -120,6 +137,7 @@ function drawGrid(ctx, w, h, color = "#e8edf4") {
 }
 
 let pack = null;
+let clipIndex = []; // example library: one entry per presentation story
 let ctrl = new MadController();
 let sim = { advanced: [], actions: [], nAdvances: 0 };
 let controllerProbs = [];
@@ -375,28 +393,36 @@ function resim() {
   ctrl.quietRetractSec = numberParam("p-quiet", 90);
   controllerProbs = oracle ? oracleFireNow() : pack.fire_now;
   sim = ctrl.simulate(controllerProbs, pack.wake);
-  $("m-thr").textContent = thr.toFixed(2);
   $("thr-lab").textContent = thr.toFixed(2);
   $("model-tag").textContent = oracle
     ? "Controller input - annotation oracle - active model"
     : "Model - fire_now - active";
   $("pill-geo").textContent = oracle
-    ? `ORACLE | A=${numberParam("p-lag", 10)}s | lead=${numberParam("p-lead", 30)}s`
-    : "MODEL | A=10s | lead=30s | no wake";
+    ? `ORACLE A=${numberParam("p-lag", 10)}s lead=${numberParam("p-lead", 30)}s`
+    : "MODEL A=10s lead=30s";
+  $("pill-geo").title = oracle
+    ? "Controller input from scored annotations (presentation only), deadline geometry"
+    : "fire_now head, 164 deployable features (no hypnogram wake), A=10 s, earliest lead 30 s";
   $("pill-geo").classList.toggle("adv", oracle);
   lastActionSent = -1;
   updateHud();
 }
 
 function coverageNow() {
-  const n = Math.max(1, Math.floor(tNow) + 1);
-  const adv = sim.advanced.slice(0, n);
   const evs = policyEvents(pack.events).filter((e) => e.start <= tNow + 1);
   const linked = evs.filter((e) => e.arousal_linked);
   const lag = $("policy-source").value === "oracle" ? numberParam("p-lag", 10) : 10;
   const lead = $("policy-source").value === "oracle" ? numberParam("p-lead", 30) : 30;
-  const cov = linked.filter((e) => eventCovered(e, sim.advanced, lag, lead)).length;
-  return { linked: linked.length, cov };
+  let cov = 0;
+  const leads = [];
+  for (const e of linked) {
+    const hit = coverHit(e, sim.advanced, lag, lead);
+    if (hit == null) continue;
+    cov += 1;
+    const start = runStartAt(sim.advanced, hit);
+    leads.push(e.start - (start + ctrl.advanceSec));
+  }
+  return { linked: linked.length, cov, leadMedian: median(leads), nLead: leads.length };
 }
 
 function updateHud() {
@@ -429,6 +455,11 @@ function updateHud() {
     `${Math.round(frac * 100)}% (clip ${Math.round(fracClip * 100)}%)`;
   const c = coverageNow();
   $("m-cov").textContent = `${c.cov} / ${c.linked}`;
+  $("m-lead").textContent =
+    c.leadMedian == null
+      ? "--"
+      : `${c.leadMedian >= 0 ? "+" : ""}${c.leadMedian.toFixed(0)} s (n=${c.nLead})`;
+  $("m-duty").textContent = `${Math.round((1 - fracClip) * 100)}% less jaw time`;
   $("mad-sub").textContent =
     pos === ADVANCED
       ? "Hold through burst -- new fires ignored"
@@ -823,9 +854,11 @@ function seekBefore(start) {
   render();
 }
 
-// Opening frame: prefer an OA cold start when the policy is OA-only; otherwise the
-// first cold start that has a full pre-roll of history and finds the device retracted.
+// Opening frame: land ~45 s before the first advance so the audience sees the jaw
+// move; fall back to the first cold start with enough history behind it.
 function burstT() {
+  const firstAdvance = sim.actions.findIndex((a, i) => a === ADVANCE && i >= 45);
+  if (firstAdvance >= 0) return Math.max(0, firstAdvance - 45);
   const cold = coldStartTimes();
   let preferred = cold;
   if ($("policy-source").value === "oracle") {
@@ -949,15 +982,85 @@ function updatePolicyUi() {
   }
 }
 
-async function boot() {
-  pack = await fetch("/api/pack").then((r) => r.json());
+function clipEntry(id) {
+  return clipIndex.find((c) => c.id === id) || null;
+}
+
+// Each example ships the controller input it is meant to be shown with.
+function applyPolicy(policy) {
+  if (!policy) return;
+  if (policy.source) $("policy-source").value = policy.source;
+  if (Array.isArray(policy.kinds)) {
+    $("target-oa").checked = policy.kinds.includes("obstructive");
+    $("target-hyp").checked = policy.kinds.includes("hypopnea");
+    $("target-unsure").checked = policy.kinds.includes("unsure");
+  }
+  updatePolicyUi();
+}
+
+function paintStory(entry) {
+  if (!entry) {
+    $("story-title").textContent = "MESA held-out clip";
+    $("story-watch").textContent = "";
+    $("story-num").textContent = "";
+    return;
+  }
+  const m = entry.metrics || {};
+  $("story-title").textContent = entry.title;
+  $("story-watch").textContent = entry.watch || "";
+  const bits = [];
+  if (m.n_covered != null) bits.push(`${m.n_covered}/${m.n_linked} covered`);
+  if (m.advances != null) bits.push(`${m.advances} adv`);
+  if (m.fraction_advanced != null) {
+    bits.push(`${Math.round(m.fraction_advanced * 100)}% vs 100% static`);
+  }
+  $("story-num").textContent = bits.join(" | ");
+}
+
+async function loadClip(id) {
+  const entry = clipEntry(id);
+  const url = entry ? `/api/pack?clip=${encodeURIComponent(entry.pack_id || entry.id)}` : "/api/pack";
+  pack = await fetch(url).then((r) => r.json());
+  if (entry) $("clip").value = entry.id;
   $("pill-sub").textContent = `MESA ${pack.meta.subject_id}`;
-  $("pill-geo").textContent = "A=10s | lead=30s | no wake";
   NORM.pres = robustRange(pack.pres);
   const spo2Range = robustRange(pack.spo2, 0.01, 1.0, 0.05);
   NORM.spo2 = { lo: spo2Range.lo, hi: Math.min(100, spo2Range.hi) };
+  applyPolicy(entry ? entry.policy : null);
+  paintStory(entry);
+  playing = false;
+  $("btn-play").textContent = "Play";
+  resim();
+  tNow = burstT();
+  lastActionSent = Math.floor(tNow) - 1;
+  render();
+}
+
+async function boot() {
+  const index = await fetch("/api/clips")
+    .then((r) => r.json())
+    .catch(() => null);
+  clipIndex = (index && index.clips) || [];
+  const sel = $("clip");
+  if (clipIndex.length) {
+    sel.innerHTML = "";
+    for (const c of clipIndex) {
+      const opt = document.createElement("option");
+      opt.value = c.id;
+      opt.textContent = c.title;
+      sel.appendChild(opt);
+    }
+  } else {
+    $("clip").parentElement.style.display = "none";
+  }
 
   const params = new URLSearchParams(location.search);
+  const wantedClip = params.get("clip");
+  const startId =
+    (wantedClip && clipEntry(wantedClip) && wantedClip) ||
+    (index && index.default) ||
+    (clipIndex[0] && clipIndex[0].id) ||
+    null;
   const wantedSpeed = Number(params.get("speed"));
   if ([1, 2, 4, 8, 16].includes(wantedSpeed)) {
     speed = wantedSpeed;
@@ -969,9 +1072,13 @@ async function boot() {
     $("layout").value = wantedLayout;
     $("stage").className = `stage mode-${wantedLayout}`;
   }
-  resim();
-  tNow = burstT();
-  render();
+  await loadClip(startId);
+  const wantedT = Number(params.get("t")); // deep link to a moment in the clip
+  if (Number.isFinite(wantedT) && params.get("t") !== null) {
+    tNow = Math.min(pack.duration_sec, Math.max(0, wantedT));
+    lastActionSent = Math.floor(tNow) - 1;
+    render();
+  }
   requestAnimationFrame(tick);
   if (params.get("play") === "1") {
     playing = true;
@@ -997,6 +1104,7 @@ async function boot() {
     const target = nextSeekTarget(targetStartTimes());
     if (target != null) seekBefore(target);
   };
+  $("clip").onchange = (e) => loadClip(e.target.value);
   $("speed").onchange = (e) => {
     speed = Number(e.target.value);
   };

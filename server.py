@@ -25,6 +25,8 @@ from fastapi.staticfiles import StaticFiles
 
 ROOT = Path(__file__).resolve().parent
 PACK_PATH = ROOT / "data" / "pack.json"
+CLIP_DIR = ROOT / "data" / "clips"
+CLIP_INDEX = CLIP_DIR / "index.json"
 
 _esp_lock = threading.Lock()
 _esp = None  # type: ignore[assignment]
@@ -82,11 +84,26 @@ def create_app(esp_port: str | None) -> FastAPI:
     def index():
         return FileResponse(ROOT / "static" / "index.html")
 
+    @app.get("/api/clips")
+    def clips():
+        """Example library: one entry per presentation story (see _build_clips.py)."""
+        if not CLIP_INDEX.is_file():
+            return {"default": None, "clips": []}
+        return json.loads(CLIP_INDEX.read_text(encoding="utf-8"))
+
     @app.get("/api/pack")
-    def pack():
-        if not PACK_PATH.is_file():
+    def pack(clip: str | None = None):
+        path = PACK_PATH
+        if clip:
+            if not clip.replace("_", "").isalnum():
+                raise HTTPException(400, "bad clip id")
+            candidate = CLIP_DIR / f"{clip}.json"
+            if not candidate.is_file():
+                raise HTTPException(404, f"clip {clip} not found")
+            path = candidate
+        if not path.is_file():
             raise HTTPException(500, "data/pack.json missing")
-        return json.loads(PACK_PATH.read_text(encoding="utf-8"))
+        return json.loads(path.read_text(encoding="utf-8"))
 
     @app.get("/api/esp/status")
     def esp_status():
