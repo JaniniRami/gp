@@ -201,6 +201,19 @@ the trace scrolls. The real range in use is printed in the bottom-left of each
 lane. Pulse-ox dropout (SpO2 below 50%) is left as a gap rather than drawn as a
 desaturation, and never sets the range.
 
+Each lane also draws its own labelled reference line, so the normalization does
+not hide where the meaningful level is:
+
+| Lane | Reference line |
+|---|---|
+| Pres | **0 = no flow**, mid-lane in every clip. An apnea is the trace collapsing onto it. |
+| SpO2 | Dashed **90%** plus the axis bounds. 0% is never inside a real SpO2 window, so no zero line is faked; when 90% is off scale the hint says so. |
+| Model heads | Probability **0** and **1** (labels on the right) plus the dashed decision threshold. |
+| Overlay | Probability **0** at the floor, the blue **Pres 0** no-flow line, and the threshold. |
+
+A reference line is only drawn when its value is actually inside that lane's
+display range.
+
 Nasal pressure is stored at 32 Hz in the 18 min clips and at 8 Hz in the whole-night
 clip (still well above breathing rate) to keep the night to about 3 MB.
 

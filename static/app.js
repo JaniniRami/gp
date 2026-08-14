@@ -292,6 +292,35 @@ function drawScaleHint(ctx, h, text) {
   ctx.fillText(text, 10, h - 6);
 }
 
+// A labelled horizontal reference line at a raw value. Nothing is drawn when the
+// value is outside the lane's range, so a lane never shows a baseline it does not
+// actually contain (SpO2 windows do not include 0%).
+function drawValueAxis(ctx, w, h, range, value, label, opts = {}) {
+  const u = (value - range.lo) / (range.hi - range.lo);
+  if (!(u >= 0 && u <= 1)) return false;
+  const y = yOfUnit(u, h);
+  ctx.save();
+  ctx.strokeStyle = opts.color || "rgba(15,23,42,0.30)";
+  ctx.lineWidth = opts.width || 1;
+  if (opts.dash) ctx.setLineDash(opts.dash);
+  ctx.beginPath();
+  ctx.moveTo(0, y);
+  ctx.lineTo(w, y);
+  ctx.stroke();
+  ctx.setLineDash([]);
+  if (label) {
+    ctx.fillStyle = opts.labelColor || "rgba(71,85,105,0.95)";
+    ctx.font = '9px "IBM Plex Mono", monospace';
+    // The bottom-left corner belongs to the scale hint, so a floor label goes right.
+    const right = opts.labelSide === "right";
+    ctx.textAlign = right ? "right" : "left";
+    ctx.textBaseline = "alphabetic";
+    ctx.fillText(label, right ? w - 3 : 3, Math.max(9, y - 2));
+  }
+  ctx.restore();
+  return true;
+}
+
 function drawUnitSeries(ctx, opts) {
   const { values, fs, range, color, width, tLeft, tRight, w, h } = opts;
   // Live monitor: never draw past the cursor, the future is not known yet.
@@ -779,6 +808,8 @@ function drawAir(tLeft, tRight, now) {
   drawGrid(ctx, w, h);
   drawEvents(ctx, h, tLeft, tRight, w, now);
   drawAdvanced(ctx, h, tLeft, tRight, w, now, "veil-note");
+  // Zero flow: an apnea is the trace collapsing onto this line.
+  drawValueAxis(ctx, w, h, NORM.pres, 0, "0");
   drawUnitSeries(ctx, {
     values: pack.pres,
     fs: pack.fs_pres,
@@ -791,7 +822,7 @@ function drawAir(tLeft, tRight, now) {
     w,
     h,
   });
-  drawScaleHint(ctx, h, `scale ${NORM.pres.lo.toFixed(2)} .. ${NORM.pres.hi.toFixed(2)}`);
+  drawScaleHint(ctx, h, `scale ${NORM.pres.lo.toFixed(2)} .. ${NORM.pres.hi.toFixed(2)}   0 = no flow`);
   drawNow(ctx, h, tLeft, tRight, w, now);
 }
 
@@ -801,6 +832,15 @@ function drawSpo2(tLeft, tRight, now) {
   drawGrid(ctx, w, h);
   drawEvents(ctx, h, tLeft, tRight, w, now);
   drawAdvanced(ctx, h, tLeft, tRight, w, now);
+  // 0% SpO2 is never inside a real display window, so the reference here is the
+  // 90% desaturation level; drawValueAxis draws nothing when it is off scale.
+  const has90 = drawValueAxis(ctx, w, h, NORM.spo2, 90, "90%", { dash: [4, 3] });
+  for (const v of [NORM.spo2.hi, NORM.spo2.lo]) {
+    drawValueAxis(ctx, w, h, NORM.spo2, v, `${v.toFixed(1)}%`, {
+      color: "rgba(15,23,42,0.14)",
+      labelSide: "right",
+    });
+  }
   drawUnitSeries(ctx, {
     values: pack.spo2,
     fs: pack.fs_decision,
@@ -814,7 +854,12 @@ function drawSpo2(tLeft, tRight, now) {
     w,
     h,
   });
-  drawScaleHint(ctx, h, `${NORM.spo2.lo.toFixed(1)} .. ${NORM.spo2.hi.toFixed(1)} %`);
+  drawScaleHint(
+    ctx,
+    h,
+    `${NORM.spo2.lo.toFixed(1)} .. ${NORM.spo2.hi.toFixed(1)} %` +
+      (has90 ? "   dashed = 90%" : "   (90% off scale)"),
+  );
   drawNow(ctx, h, tLeft, tRight, w, now);
 }
 
@@ -825,16 +870,22 @@ function drawOverlay(tLeft, tRight, now) {
   drawEvents(ctx, h, tLeft, tRight, w, now);
   drawAdvanced(ctx, h, tLeft, tRight, w, now, "veil-note-overlay");
 
-  const yThr = yOfUnit(ctrl.threshold, h);
-  ctx.strokeStyle = "#64748b";
-  ctx.setLineDash([3, 3]);
-  ctx.beginPath();
-  ctx.moveTo(0, yThr);
-  ctx.lineTo(w, yThr);
-  ctx.stroke();
-  ctx.setLineDash([]);
-
   const unitRange = { lo: 0, hi: 1 };
+  // Zero lines for the two things stacked in this lane: probability 0 at the
+  // floor, and the nasal-pressure no-flow level where the traces actually sit.
+  drawValueAxis(ctx, w, h, unitRange, 0, "prob 0", {
+    color: "rgba(15,23,42,0.28)",
+    labelSide: "right",
+  });
+  drawValueAxis(ctx, w, h, NORM.pres, 0, "Pres 0", {
+    color: "rgba(2,132,199,0.35)",
+    labelColor: "rgba(2,132,199,0.9)",
+  });
+  drawValueAxis(ctx, w, h, unitRange, ctrl.threshold, `thr ${ctrl.threshold.toFixed(2)}`, {
+    color: "#64748b",
+    dash: [3, 3],
+  });
+
   const finite = (v) => v != null && Number.isFinite(v);
   const common = { fs: pack.fs_decision, range: unitRange, tLeft, tRight, tMax: now, w, h, valid: finite };
   const p0 = Math.max(0, Math.floor(tLeft));
@@ -929,15 +980,13 @@ function drawModel(tLeft, tRight, now) {
   ctx.clearRect(0, 0, w, h);
   drawGrid(ctx, w, h, "#e8edf4");
   drawAdvanced(ctx, h, tLeft, tRight, w, now);
-  const yThr = h - ctrl.threshold * (h - 8) - 4;
-  ctx.strokeStyle = "#64748b";
-  ctx.setLineDash([3, 3]);
-  ctx.beginPath();
-  ctx.moveTo(0, yThr);
-  ctx.lineTo(w, yThr);
-  ctx.stroke();
-  ctx.setLineDash([]);
   const unitRange = { lo: 0, hi: 1 };
+  drawValueAxis(ctx, w, h, unitRange, 1, "1", { color: "rgba(15,23,42,0.14)", labelSide: "right" });
+  drawValueAxis(ctx, w, h, unitRange, 0, "0", { color: "rgba(15,23,42,0.30)", labelSide: "right" });
+  drawValueAxis(ctx, w, h, unitRange, ctrl.threshold, `thr ${ctrl.threshold.toFixed(2)}`, {
+    color: "#64748b",
+    dash: [3, 3],
+  });
   const finite = (v) => v != null && Number.isFinite(v);
   const common = { fs: pack.fs_decision, range: unitRange, tLeft, tRight, tMax: now, w, h, valid: finite };
   if (pack.pre_onset) {
@@ -952,7 +1001,7 @@ function drawModel(tLeft, tRight, now) {
     for (let i = i0; i < i1; i++) {
       if (!finite(pack.fire_now[i])) continue;
       const x = xOf(i, tLeft, tRight, w);
-      const y = h - pack.fire_now[i] * (h - 8) - 4;
+      const y = yOfUnit(pack.fire_now[i], h);
       ctx.beginPath();
       ctx.arc(x, y, 2.0, 0, Math.PI * 2);
       ctx.fill();
@@ -967,7 +1016,11 @@ function drawModel(tLeft, tRight, now) {
       valid: () => true,
     });
   }
-  drawScaleHint(ctx, h, "gold pre_onset   green fire_now   slate active   gap = unscored");
+  drawScaleHint(
+    ctx,
+    h,
+    "gold pre_onset   green fire_now   slate active   0..1 axis right   gap = unscored",
+  );
   drawNow(ctx, h, tLeft, tRight, w, now);
 }
 
