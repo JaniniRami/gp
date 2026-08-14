@@ -2,7 +2,7 @@
 
 Presentation replay of the MESA MAD controller on a **subject-held-out** night clip.
 
-The browser plays nasal pressure + SpO2 as a live scrolling PSG. The **fire_now** head (deployable, no hypnogram-wake features) drives the same 1 Hz control loop used in the paper stack: 10 s advance, 60 s refractory, hold-through-burst, then retract. When the MAD advances, the traces go gray — the device is already out, so we stop looking for a new fire.
+The browser plays nasal pressure + SpO2 as a live scrolling PSG. The **fire_now** head (deployable, no hypnogram-wake features) drives the same 1 Hz control loop used in the paper stack: 10 s advance, 60 s refractory, hold-through-burst, then retract. When the MAD advances, the traces go gray â€” the device is already out, so we stop looking for a new fire.
 
 **This is untreated PSG.** Coverage means the advance completed before the arousal deadline. It does not mean the event or arousal was prevented.
 
@@ -18,7 +18,7 @@ The browser plays nasal pressure + SpO2 as a live scrolling PSG. The **fire_now*
 | `models/xgb_active.joblib` | Active-event head (shown as the cyan model trace) |
 | `firmware/drv8871_mad_control/` | ESP32 + DRV8871 sketch (IN1=27, IN2=26) |
 
-Clip: **MESA 1510**, test split, 7320–8040 s. One advance covers a mixed **OA + hypopnea** burst (8 linked events, all preemptive at threshold 0.55). Geometry: **A = 10 s**, earliest lead **30 s**.
+Clip: **MESA 1510**, test split, 7320â€“8040 s. One advance covers a mixed **OA + hypopnea** burst (8 linked events, all preemptive at threshold 0.55). Geometry: **A = 10 s**, earliest lead **30 s**.
 
 ## Run on a Mac (M4)
 
@@ -35,7 +35,7 @@ python server.py
 
 The site opens at [http://127.0.0.1:8765](http://127.0.0.1:8765).
 
-Presenter path: **Jump to burst** ? **Play** at 8× ? watch `fire_now` cross the threshold ? MAD ADVANCING (10 s) ? gray HOLD through the cluster ? retract when quiet.
+Presenter path: **Jump to burst** ? **Play** at 8Ã— ? watch `fire_now` cross the threshold ? MAD ADVANCING (10 s) ? gray HOLD through the cluster ? retract when quiet.
 
 ## ESP32 actuator
 

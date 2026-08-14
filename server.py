@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""ProactMAD presentation demo — serve the live-replay UI and optional ESP serial.
+"""ProactMAD presentation demo â€” serve the live-replay UI and optional ESP serial.
 
 Usage (Mac):
   python3 -m venv .venv && source .venv/bin/activate

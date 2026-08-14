@@ -3,7 +3,7 @@
 <head>
   <meta charset="utf-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1" />
-  <title>ProactMAD — live actuation demo</title>
+  <title>ProactMAD â€” live actuation demo</title>
   <link rel="preconnect" href="https://fonts.googleapis.com" />
   <link href="https://fonts.googleapis.com/css2?family=IBM+Plex+Mono:wght@400;500;600&family=IBM+Plex+Sans:wght@400;500;600&display=swap" rel="stylesheet" />
   <link rel="stylesheet" href="/static/style.css" />
@@ -13,12 +13,12 @@
     <header class="top">
       <div class="brand">
         <h1>PROACTMAD</h1>
-        <span>live OSA actuation · untreated PSG replay</span>
+        <span>live OSA actuation Â· untreated PSG replay</span>
       </div>
       <div class="pills">
-        <div class="pill" id="pill-sub">MESA —</div>
+        <div class="pill" id="pill-sub">MESA â€”</div>
         <div class="pill" id="pill-split">subject held-out</div>
-        <div class="pill" id="pill-geo">A=10s · lead=30s</div>
+        <div class="pill" id="pill-geo">A=10s Â· lead=30s</div>
         <div class="pill" id="pill-esp">ESP disconnected</div>
         <div class="pill" id="pill-mad">MAD retracted</div>
       </div>
@@ -42,7 +42,7 @@
           <div class="metric"><span>threshold</span><b id="m-thr">0.55</b></div>
           <div class="metric"><span>advances</span><b id="m-adv">0</b></div>
           <div class="metric"><span>time advanced</span><b id="m-frac">0%</b></div>
-          <div class="metric"><span>events covered</span><b id="m-cov">—</b></div>
+          <div class="metric"><span>events covered</span><b id="m-cov">â€”</b></div>
         </div>
         <div class="card">
           <h2>Legend</h2>
@@ -60,7 +60,7 @@
 
       <section class="stage">
         <div class="trace-wrap">
-          <div class="tag">Nasal airflow · Pres</div>
+          <div class="tag">Nasal airflow Â· Pres</div>
           <div class="now-label" id="now-air">t = 00:00</div>
           <div class="veil-note" id="veil-note" style="display:none;right:18%"></div>
           <canvas id="c-air"></canvas>
@@ -70,7 +70,7 @@
           <canvas id="c-spo2"></canvas>
         </div>
         <div class="trace-wrap">
-          <div class="tag">Model · fire_now  ·  active</div>
+          <div class="tag">Model Â· fire_now  Â·  active</div>
           <canvas id="c-model"></canvas>
         </div>
         <canvas id="c-mini" style="height:28px;border-radius:8px;border:1px solid #1e2633;background:#0b0f16"></canvas>
@@ -80,11 +80,11 @@
     <footer class="bottom">
       <button class="primary" id="btn-play">Play</button>
       <select id="speed">
-        <option value="1">1× live</option>
-        <option value="2">2×</option>
-        <option value="4">4×</option>
-        <option value="8" selected>8×</option>
-        <option value="16">16×</option>
+        <option value="1">1Ã— live</option>
+        <option value="2">2Ã—</option>
+        <option value="4">4Ã—</option>
+        <option value="8" selected>8Ã—</option>
+        <option value="16">16Ã—</option>
       </select>
       <button id="btn-burst">Jump to burst</button>
       <button id="btn-reset">Reset</button>
