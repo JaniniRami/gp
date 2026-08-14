@@ -15,8 +15,8 @@
         ]
       },
       "subject_id": "3901",
-      "clip_start_sec": 300,
-      "duration_sec": 32099,
+      "clip_start_sec": 600,
+      "duration_sec": 31799,
       "metrics": {
         "policy": "model",
         "threshold": 0.55,
@@ -40,15 +40,15 @@
         "best_fresh_cold_start_lead_sec": 42.8,
         "best_fresh_oa_cold_start_lead_sec": 0.0,
         "median_fresh_lead_sec": 40.2,
-        "first_advance_sec": 300,
+        "first_advance_sec": 0,
         "advances": 15,
-        "advances_per_hour": 1.68,
-        "fraction_advanced": 0.1875,
+        "advances_per_hour": 1.7,
+        "fraction_advanced": 0.1893,
         "static_mad_fraction_advanced": 1.0,
-        "duty_saved_vs_static": 0.8125,
+        "duty_saved_vs_static": 0.8107,
         "max_events_per_advance": 5,
         "spo2_min": 90.9,
-        "wake_frac": 0.551
+        "wake_frac": 0.547
       },
       "metrics_oracle_oa": null,
       "cohort": {

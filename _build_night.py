@@ -107,6 +107,20 @@ def sleep_span(wake: np.ndarray) -> tuple[int, int]:
     return t0, t1
 
 
+def trim_to_first_scored(night: bc.Night, t0: int, t1: int) -> int:
+    """Never open a clip inside the 600 s lookback.
+
+    The replay starts at t=0 for a whole night, so a leading unscored run shows
+    three blank heads and reads as a broken model rather than as missing history.
+    """
+    scored = np.asarray(night.scored[t0:t1], dtype=bool)
+    if not scored.any() or scored[0]:
+        return t0
+    lead = int(np.argmax(scored))
+    print(f"  clip start moved {lead}s later: opening on the first scored second", flush=True)
+    return t0 + lead
+
+
 def night_quality(pres: np.ndarray, fs: float) -> dict:
     """Sensor dropout tolerance for a whole night is looser than for an 18 min clip."""
     q = bc.pres_quality(pres, fs)
@@ -339,6 +353,10 @@ def build_subject(
     night = bc.load_night(
         sid, fire, active, ki, pre=pre, dense=True, dense_ranges=[(t0, t1)]
     )
+    t0 = trim_to_first_scored(night, t0, t1)
+    if not (MIN_NIGHT_SEC <= t1 - t0 <= MAX_NIGHT_SEC):
+        print(f"{sid}: scored span {(t1 - t0) / 3600:.1f} h outside the demo range")
+        return 1
     stats = bc.window_stats(night, t0, t1)
     if not stats.get("ok"):
         print(f"{sid}: too few events to score")
