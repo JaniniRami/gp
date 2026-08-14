@@ -1,0 +1,106 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>ProactMAD — live actuation demo</title>
+  <link rel="preconnect" href="https://fonts.googleapis.com" />
+  <link href="https://fonts.googleapis.com/css2?family=IBM+Plex+Mono:wght@400;500;600&family=IBM+Plex+Sans:wght@400;500;600&display=swap" rel="stylesheet" />
+  <link rel="stylesheet" href="/static/style.css" />
+</head>
+<body>
+  <div class="app">
+    <header class="top">
+      <div class="brand">
+        <h1>PROACTMAD</h1>
+        <span>live OSA actuation · untreated PSG replay</span>
+      </div>
+      <div class="pills">
+        <div class="pill" id="pill-sub">MESA —</div>
+        <div class="pill" id="pill-split">subject held-out</div>
+        <div class="pill" id="pill-geo">A=10s · lead=30s</div>
+        <div class="pill" id="pill-esp">ESP disconnected</div>
+        <div class="pill" id="pill-mad">MAD retracted</div>
+      </div>
+    </header>
+
+    <div class="main">
+      <aside class="side">
+        <div class="card">
+          <h2>Actuator</h2>
+          <svg class="jaw" id="jaw" viewBox="0 0 240 88" aria-hidden="true">
+            <rect x="18" y="18" width="204" height="52" rx="12" fill="#0b0f16" stroke="#2a364a"/>
+            <rect id="jaw-fill" x="28" y="28" width="24" height="32" rx="6" fill="#c4f25a"/>
+            <text x="120" y="78" text-anchor="middle" fill="#8b97ab" font-size="10" font-family="IBM Plex Mono">retracted ? advanced</text>
+          </svg>
+          <div class="state-name" id="mad-state">RETRACTED</div>
+          <div class="state-sub" id="mad-sub">Waiting for fire_now ? threshold</div>
+        </div>
+        <div class="card">
+          <h2>This clip</h2>
+          <div class="metric"><span>fire_now</span><b id="m-p">0.00</b></div>
+          <div class="metric"><span>threshold</span><b id="m-thr">0.55</b></div>
+          <div class="metric"><span>advances</span><b id="m-adv">0</b></div>
+          <div class="metric"><span>time advanced</span><b id="m-frac">0%</b></div>
+          <div class="metric"><span>events covered</span><b id="m-cov">—</b></div>
+        </div>
+        <div class="card">
+          <h2>Legend</h2>
+          <div class="legend">
+            <div><span class="sw" style="background:#5ec8ff"></span>Nasal pressure (Pres)</div>
+            <div><span class="sw" style="background:#ff6b8a"></span>SpO2</div>
+            <div><span class="sw" style="background:#c4f25a"></span>Model fire_now</div>
+            <div><span class="sw" style="background:#ffb020"></span>Obstructive apnea</div>
+            <div><span class="sw" style="background:#c084fc"></span>Hypopnea / Unsure</div>
+            <div><span class="sw" style="background:#ffe08a"></span>Arousal</div>
+            <div><span class="sw" style="background:#64748b"></span>MAD advanced (hold / ignore)</div>
+          </div>
+        </div>
+      </aside>
+
+      <section class="stage">
+        <div class="trace-wrap">
+          <div class="tag">Nasal airflow · Pres</div>
+          <div class="now-label" id="now-air">t = 00:00</div>
+          <div class="veil-note" id="veil-note" style="display:none;right:18%"></div>
+          <canvas id="c-air"></canvas>
+        </div>
+        <div class="trace-wrap">
+          <div class="tag">SpO2</div>
+          <canvas id="c-spo2"></canvas>
+        </div>
+        <div class="trace-wrap">
+          <div class="tag">Model · fire_now  ·  active</div>
+          <canvas id="c-model"></canvas>
+        </div>
+        <canvas id="c-mini" style="height:28px;border-radius:8px;border:1px solid #1e2633;background:#0b0f16"></canvas>
+      </section>
+    </div>
+
+    <footer class="bottom">
+      <button class="primary" id="btn-play">Play</button>
+      <select id="speed">
+        <option value="1">1× live</option>
+        <option value="2">2×</option>
+        <option value="4">4×</option>
+        <option value="8" selected>8×</option>
+        <option value="16">16×</option>
+      </select>
+      <button id="btn-burst">Jump to burst</button>
+      <button id="btn-reset">Reset</button>
+      <label class="slider">window
+        <input id="win" type="range" min="30" max="120" value="60" />
+        <span id="win-lab">60s</span>
+      </label>
+      <label class="slider">threshold
+        <input id="thr" type="range" min="20" max="90" value="55" />
+        <span id="thr-lab">0.55</span>
+      </label>
+      <button id="btn-esp">Connect ESP</button>
+      <div class="clock" id="clock">00:00 / 12:00</div>
+      <div class="foot">Untreated MESA night: gray hold = device already advanced, controller not re-triggering. Coverage is timing vs arousal deadline, not proven prevention.</div>
+    </footer>
+  </div>
+  <script src="/static/app.js"></script>
+</body>
+</html>

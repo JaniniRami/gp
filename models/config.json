@@ -1,0 +1,16 @@
+{
+  "head": "fire_now",
+  "pack": "no_hypnogram_wake",
+  "n_features": 164,
+  "dropped": [
+    "cs_t_since_wake",
+    "cs_wake_frac_10m"
+  ],
+  "test_auroc_fire_now_1hz": 0.8512,
+  "geometry": {
+    "A_sec": 10,
+    "earliest_lead_sec": 30
+  },
+  "inputs": "fast Pres 32s@32Hz + mid/slow + SpO2 + position + flow-morph + breath + coldstart (no scored wake)",
+  "note": "Subject-held-out MESA test. Headline product metric is arousal coverage vs fraction advanced, not this clip AUROC."
+}

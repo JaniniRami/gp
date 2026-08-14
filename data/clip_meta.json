@@ -1,0 +1,137 @@
+{
+  "subject_id": "1510",
+  "source": "MESA Sleep, NSRR Compumedics",
+  "split": "test (subject held-out)",
+  "clip_start_sec": 7320,
+  "clip_end_sec": 8040,
+  "duration_sec": 720.0,
+  "fs_pres": 32.0,
+  "fs_decision": 1.0,
+  "geometry": {
+    "task": "fire_now deadline-based MAD actuation",
+    "actuation_lag_sec": 10.0,
+    "earliest_lead_sec": 30.0,
+    "refractory_sec": 60.0,
+    "quiet_retract_sec": 90.0,
+    "events": "obstructive apnea + hypopnea + Unsure (MESA hyp?30%)"
+  },
+  "model": {
+    "head": "fire_now",
+    "pack": "no hypnogram-wake (deployable)",
+    "n_features": 164,
+    "test_auroc_fire_now": 0.8512,
+    "weights": "models/xgb_fire_now.joblib"
+  },
+  "controller": {
+    "threshold": 0.55,
+    "n_advances": 1,
+    "fraction_advanced": 0.3333333333333333,
+    "n_events": 8,
+    "n_oa": 1,
+    "n_hyp": 7,
+    "n_covered_linked": 8,
+    "n_preemptive": 8
+  },
+  "disclaimer": "Untreated PSG: coverage is timing (advance completed before arousal deadline), not proven event or arousal prevention.",
+  "events": [
+    {
+      "start": 481.3000000000002,
+      "end": 496.60000000000036,
+      "kind": "hypopnea",
+      "arousal_start": 495.60000000000036,
+      "arousal_linked": true,
+      "is_cluster_first": true
+    },
+    {
+      "start": 523.3999999999996,
+      "end": 533.3999999999996,
+      "kind": "hypopnea",
+      "arousal_start": 545.0,
+      "arousal_linked": true,
+      "is_cluster_first": false
+    },
+    {
+      "start": 538.5,
+      "end": 548.5,
+      "kind": "hypopnea",
+      "arousal_start": 545.0,
+      "arousal_linked": true,
+      "is_cluster_first": false
+    },
+    {
+      "start": 558.0,
+      "end": 574.1000000000004,
+      "kind": "hypopnea",
+      "arousal_start": 604.8000000000002,
+      "arousal_linked": true,
+      "is_cluster_first": false
+    },
+    {
+      "start": 581.1999999999998,
+      "end": 591.1999999999998,
+      "kind": "hypopnea",
+      "arousal_start": 604.8000000000002,
+      "arousal_linked": true,
+      "is_cluster_first": false
+    },
+    {
+      "start": 595.5,
+      "end": 605.5,
+      "kind": "hypopnea",
+      "arousal_start": 604.8000000000002,
+      "arousal_linked": true,
+      "is_cluster_first": false
+    },
+    {
+      "start": 642.0,
+      "end": 652.0,
+      "kind": "hypopnea",
+      "arousal_start": 682.1000000000004,
+      "arousal_linked": true,
+      "is_cluster_first": false
+    },
+    {
+      "start": 695.8999999999996,
+      "end": 720.0,
+      "kind": "obstructive",
+      "arousal_start": null,
+      "arousal_linked": true,
+      "is_cluster_first": false
+    }
+  ],
+  "arousals": [
+    {
+      "start": 495.60000000000036,
+      "end": 509.2000000000007
+    },
+    {
+      "start": 545.0,
+      "end": 555.6000000000004
+    },
+    {
+      "start": 604.8000000000002,
+      "end": 613.3000000000002
+    },
+    {
+      "start": 682.1000000000004,
+      "end": 690.0
+    }
+  ],
+  "window_search": {
+    "ok": true,
+    "story": 33.093333333333334,
+    "t0": 7320,
+    "t1": 8040,
+    "n_ev": 8,
+    "n_oa": 1,
+    "n_hyp": 7,
+    "n_link": 8,
+    "n_cov": 8,
+    "n_pre": 8,
+    "n_adv": 1,
+    "frac": 0.3333333333333333,
+    "p95": 0.868635094165802,
+    "p50": 0.7471891939640045,
+    "sid": "1510"
+  }
+}
