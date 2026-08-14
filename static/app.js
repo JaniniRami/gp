@@ -156,6 +156,7 @@ let winSec = 60;
 let speed = 8;
 let speedPinned = false; // once chosen by URL or user, stop auto-picking per clip
 let lastActionSent = -1;
+let lastPosSent = null; // jaw position the board was last told to hold
 let layoutMode = "stack";
 
 const PRE_ROLL_SEC = 60; // seek this far before the event we jump to
@@ -975,8 +976,22 @@ async function maybeActuate() {
   for (let k = lastActionSent + 1; k <= i; k++) {
     if (sim.actions[k] === ADVANCE) await sendEsp("ADVANCE");
     else if (sim.actions[k] === RETRACT) await sendEsp("RETRACT");
+    else continue;
+    lastPosSent = sim.actions[k] === ADVANCE ? ADVANCED : RETRACTED;
   }
   lastActionSent = i;
+}
+
+// After a jump the board is wherever the last command left it, which may not be
+// where the replay now says the jaw is. Bring the hardware back in line; a single
+// command is safe at any replay speed.
+async function syncEspPosition() {
+  if (esp.mode === "none") return;
+  const i = Math.min(sim.advanced.length - 1, Math.max(0, Math.floor(tNow)));
+  const want = i >= 0 && sim.advanced[i] ? ADVANCED : RETRACTED;
+  if (want === lastPosSent) return;
+  await sendEsp(want === ADVANCED ? "ADVANCE" : "RETRACT");
+  lastPosSent = want;
 }
 
 function tick(ts) {
@@ -1020,6 +1035,7 @@ function seekBefore(start) {
   tNow = Math.max(0, start - PRE_ROLL_SEC);
   lastActionSent = Math.floor(tNow) - 1;
   render();
+  syncEspPosition();
 }
 
 // Opening frame: land ~45 s before the first advance so the audience sees the jaw
@@ -1245,6 +1261,7 @@ async function loadClip(id) {
   tNow = burstT();
   lastActionSent = Math.floor(tNow) - 1;
   render();
+  syncEspPosition();
 }
 
 async function boot() {
@@ -1311,6 +1328,7 @@ async function boot() {
     tNow = burstT();
     lastActionSent = Math.floor(tNow) - 1;
     render();
+    syncEspPosition(); // opening frame is jaw home: bring the hardware back too
   };
   $("btn-cold").onclick = () => {
     const target = nextSeekTarget(coldStartTimes());
@@ -1365,8 +1383,14 @@ async function boot() {
   updatePolicyUi();
   $("btn-esp").onclick = connectEsp;
   $("btn-esp-test").onclick = testEspLink;
-  $("btn-adv").onclick = () => sendEsp("ADVANCE");
-  $("btn-ret").onclick = () => sendEsp("RETRACT");
+  $("btn-adv").onclick = () => {
+    lastPosSent = ADVANCED;
+    sendEsp("ADVANCE");
+  };
+  $("btn-ret").onclick = () => {
+    lastPosSent = RETRACTED;
+    sendEsp("RETRACT");
+  };
   $("btn-stop").onclick = () => sendEsp("s");
   window.addEventListener("resize", render);
 

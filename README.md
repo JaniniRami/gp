@@ -108,7 +108,7 @@ Everything lives in the two rows at the top; the page never scrolls.
 | **speed** | 1x live up to 240x (60x plays a whole night in about 9 min) |
 | **Next cold start** | Seeks to **60 s before the next cluster-first event** and cycles through all of them (wraps at the end) |
 | **Next event** | Same 60 s pre-roll, but for every target event including mid-burst ones |
-| **Reset** | Back to the opening frame (lights out for the night clip, 45 s before the first advance for a story clip) |
+| **Reset** | Back to the opening frame (lights out for the night clip, 45 s before the first advance for a story clip) and **retracts the MAD** if a board is linked |
 | **Stacked lanes / Normalized overlay** | Trace layout |
 | **window** | Visible time span, 30-120 s |
 | **threshold** | `fire_now` decision threshold; the controller re-simulates instantly |
@@ -199,6 +199,11 @@ the Actuator card (`ESP: rx ... | tx ...`).
 
 The control loop sends `ADVANCE` / `RETRACT` on rising edges during playback. The firmware
 runs the motor for 10 s then stops (hold) and answers `OK ADVANCE` / `OK RETRACT` / `OK HOLD`.
+
+**Reset** (and switching clip, or seeking with **Next cold start** / **Next event**) puts the
+board back where the replay says the jaw is, which for the opening frame means a `RETRACT`,
+so the hardware never sits advanced while the screen shows RETRACTED. Nothing is sent when
+the board is already in that position, and nothing is sent at page load.
 
 Manual serial (115200): `o` open, `c` close, `s` stop, `ADVANCE`, `RETRACT`, `0-255` speed, `?` help.
 
