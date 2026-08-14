@@ -23,7 +23,18 @@ import _build_clips as bc  # noqa: E402
 import _build_night as bn  # noqa: E402
 
 
-def patch_pack(path: Path, night: bc.Night) -> dict:
+def story_for_pack(pack: dict) -> bc.Story | None:
+    """The Story whose template regenerates this pack's headline sentence."""
+    sid = str(pack["meta"]["subject_id"])
+    cid = pack["meta"].get("story", {}).get("id")
+    if cid == bn.STORY.id:
+        return bn.STORY
+    if cid == bn.MILD_STORY.id:
+        return bn.story_for(sid, bn.MILD_STORY, bn.nsrr_ahi(sid))
+    return {s.id: s for s in bc.STORIES}.get(cid)
+
+
+def patch_pack(path: Path, night: bc.Night) -> tuple[dict, str | None]:
     pack = json.loads(path.read_text())
     dur = int(pack["duration_sec"])
     clip_start = int(pack["meta"]["clip_start_sec"])
@@ -43,11 +54,14 @@ def patch_pack(path: Path, night: bc.Night) -> dict:
     pack["advanced_default"] = [int(v) for v in ctrl.advanced_mask]
     pack["actions_default"] = [int(v) for v in ctrl.actions]
     stats = bc.window_stats(night, t0, t1)
+    watch = None
     if stats.get("ok"):
         m = bc.metrics_from(stats, "model")
         pack["meta"]["metrics"]["model"] = m
-        if path.name == "full_night.json":
-            pack["meta"]["story"]["watch"] = bc.fill_watch(bn.STORY, m)
+        story = story_for_pack(pack)
+        if story is not None:
+            watch = bc.fill_watch(story, m)
+            pack["meta"]["story"]["watch"] = watch
         pack["meta"]["controller"] = {
             "threshold": bc.THR,
             "n_advances": int(ctrl.n_advances),
@@ -80,7 +94,7 @@ def patch_pack(path: Path, night: bc.Night) -> dict:
         f"adv={ctrl.n_advances} frac={np.mean(ctrl.advanced_mask):.2f}",
         flush=True,
     )
-    return pack["meta"]["metrics"]["model"] if stats.get("ok") else {}
+    return (pack["meta"]["metrics"]["model"] if stats.get("ok") else {}), watch
 
 
 def _vec(values) -> np.ndarray:
@@ -129,15 +143,13 @@ def reapply_controller_only() -> int:
             continue
         seen.add(resolved)
         pack = json.loads(path.read_text())
-        m = patch_pack(path, night_stub_from_pack(pack))
-        stories = {s.id: s for s in bc.STORIES}
+        m, watch = patch_pack(path, night_stub_from_pack(pack))
         for row in index["clips"]:
-            cid = row.get("id")
-            if cid == path.stem and m:
-                row["metrics"] = m
-                story = stories.get(cid) or (bn.STORY if cid == "full_night" else None)
-                if story is not None:
-                    row["watch"] = bc.fill_watch(story, m)
+            if row.get("id") != path.stem or not m:
+                continue
+            row["metrics"] = m
+            if watch:
+                row["watch"] = watch
     (bc.CLIP_DIR / "index.json").write_text(json.dumps(index, indent=2) + "\n")
     return 0
 
@@ -183,13 +195,13 @@ def main() -> int:
             flush=True,
         )
         for path in unique_paths:
-            m = patch_pack(path, night)
+            m, watch = patch_pack(path, night)
             for clip in index["clips"]:
                 if clip.get("id") != path.stem or not m:
                     continue
                 clip["metrics"] = m
-                if path.stem == "full_night":
-                    clip["watch"] = bc.fill_watch(bn.STORY, m)
+                if watch:
+                    clip["watch"] = watch
 
     (bc.CLIP_DIR / "index.json").write_text(json.dumps(index, indent=2) + "\n")
     default = bc.CLIP_DIR / "full_night.json"

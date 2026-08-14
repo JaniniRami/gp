@@ -52,6 +52,51 @@ STORY = bc.Story(
     order=-1,
 )
 
+# A severe night keeps the jaw out through most of sleep, which is correct but
+# hides the advance/retract cycle. A milder night has enough quiet between
+# clusters that each actuation is a separate, visible decision.
+MILD_STORY = bc.Story(
+    id="mild_night",
+    title="Whole night, mild severity (AHI_PLACEHOLDER)",
+    watch=(
+        "Mild night, AHI AHI_PLACEHOLDER: {n_covered}/{n_linked} arousal-linked "
+        "events covered with {advances} separate advances, jaw forward "
+        "{pct_advanced}% of the night against 100% for a fixed MAD."
+    ),
+    policy={"source": "model", "kinds": bc.MODEL_KINDS},
+    score=lambda s: None,
+    order=-1,
+)
+
+AHI_CSV = (
+    ROOT / "Data/mesa_runs/mechanism_cold_v1_fix/sex_ahi_coverage_diagnostic_nights.csv"
+)
+
+
+def nsrr_ahi(sid: str) -> float | None:
+    """AHI from the NSRR diagnostic table, for labelling severity honestly."""
+    import csv
+
+    if not AHI_CSV.is_file():
+        return None
+    with AHI_CSV.open() as f:
+        for row in csv.DictReader(f):
+            if str(int(row["subject_id"])) == str(int(sid)):
+                return float(row["ahi_nsrr"])
+    return None
+
+
+def story_for(sid: str, story: bc.Story, ahi: float | None) -> bc.Story:
+    label = "unknown AHI" if ahi is None else f"{ahi:.1f}"
+    return bc.Story(
+        id=story.id,
+        title=story.title.replace("AHI_PLACEHOLDER", label),
+        watch=story.watch.replace("AHI_PLACEHOLDER", label),
+        policy=story.policy,
+        score=story.score,
+        order=story.order,
+    )
+
 
 def sleep_span(wake: np.ndarray) -> tuple[int, int]:
     asleep = np.flatnonzero(~np.asarray(wake, dtype=bool))
@@ -119,7 +164,13 @@ def night_score(s: dict) -> tuple[float | None, str]:
     return score, "ok"
 
 
-def build(night: bc.Night, stats: dict, cohort: dict) -> dict:
+def build(
+    night: bc.Night,
+    stats: dict,
+    cohort: dict,
+    story: bc.Story = STORY,
+    out_name: str = "full_night",
+) -> dict:
     sid, t0, t1 = night.sid, stats["t0"], stats["t1"]
     cache = open_night_cache(bc.H5_DIR / f"mesa-{sid}.h5")
     fs_pres = float(cache.fs_pres)
@@ -156,7 +207,7 @@ def build(night: bc.Night, stats: dict, cohort: dict) -> dict:
     ]
 
     m_model = bc.metrics_from(stats, "model")
-    watch = bc.fill_watch(STORY, m_model)
+    watch = bc.fill_watch(story, m_model)
     meta = {
         "subject_id": sid,
         "source": "MESA Sleep, NSRR Compumedics",
@@ -167,10 +218,10 @@ def build(night: bc.Night, stats: dict, cohort: dict) -> dict:
         "fs_pres": NIGHT_PACK_HZ,
         "fs_decision": 1.0,
         "story": {
-            "id": STORY.id,
-            "title": STORY.title,
+            "id": story.id,
+            "title": story.title,
             "watch": watch,
-            "policy": STORY.policy,
+            "policy": story.policy,
         },
         "geometry": {
             "task": "fire_now deadline-based MAD actuation",
@@ -211,10 +262,13 @@ def build(night: bc.Night, stats: dict, cohort: dict) -> dict:
         },
         "disclaimer": (
             "Untreated PSG: coverage is timing (advance completed before the arousal "
-            "deadline), not proven event or arousal prevention. Best of "
-            f"{cohort.get('n_nights_scored', '?')} held-out nights scored end to end "
-            f"({cohort.get('n_nights_ranked', '?')} met the demo gates); this is a "
-            "selected night, not a cohort average."
+            "deadline), not proven event or arousal prevention. "
+            + cohort.get(
+                "selection",
+                f"Best of {cohort.get('n_nights_scored', '?')} held-out nights scored "
+                f"end to end ({cohort.get('n_nights_ranked', '?')} met the demo "
+                "gates); this is a selected night, not a cohort average.",
+            )
         ),
     }
 
@@ -236,25 +290,125 @@ def build(night: bc.Night, stats: dict, cohort: dict) -> dict:
         "arousals": arousals,
     }
     bc.CLIP_DIR.mkdir(parents=True, exist_ok=True)
-    out = bc.CLIP_DIR / "full_night.json"
+    out = bc.CLIP_DIR / f"{out_name}.json"
     out.write_text(json.dumps(pack) + "\n")
     print(f"wrote {out} ({out.stat().st_size / 1e6:.1f} MB)", flush=True)
     return pack
 
 
-def merge_index(entry: dict) -> None:
+def merge_index(entry: dict, *, make_default: bool = True) -> None:
     path = bc.CLIP_DIR / "index.json"
     doc = json.loads(path.read_text()) if path.is_file() else {"clips": []}
     clips = [c for c in doc.get("clips", []) if c["id"] != entry["id"]]
-    clips.insert(0, entry)  # the night is the headline example
+    clips.insert(0, entry)  # the nights are the headline examples
     doc["clips"] = clips
-    doc["default"] = entry["id"]
+    if make_default or not doc.get("default"):
+        doc["default"] = entry["id"]
     path.write_text(json.dumps(doc, indent=2) + "\n")
     print(f"index.json now lists {len(clips)} clips, default={doc['default']}", flush=True)
 
 
+def build_subject(
+    sid: str, story: bc.Story, out_name: str, *, make_default: bool = False
+) -> int:
+    """Build one named night pack for an explicitly chosen held-out subject.
+
+    Skips the 168-night ranking: the subject is picked for a reason (severity
+    band, visible duty cycle), so the pack records that instead of a rank.
+    """
+    ki = bc.keep_idx_164()
+    fire = joblib.load(bc.MODEL_DIR / "xgb_fire_now.joblib")
+    active = joblib.load(bc.MODEL_DIR / "xgb_active.joblib")
+    pre = joblib.load(bc.MODEL_DIR / "xgb_pre_onset.joblib")
+
+    sids = sorted(p.stem for p in bc.NPZ_DIR.glob("*.npz"))
+    if sid not in set(hash_stable_split(sids).test):
+        print(f"{sid} is not in the held-out test split; refusing to ship it")
+        return 1
+
+    span_probe = bc.load_night(sid, fire, active, ki)
+    if span_probe is None:
+        print(f"{sid}: load failed")
+        return 1
+    t0, t1 = sleep_span(span_probe.wake)
+    del span_probe
+    if not (MIN_NIGHT_SEC <= t1 - t0 <= MAX_NIGHT_SEC):
+        print(f"{sid}: sleep span {(t1 - t0) / 3600:.1f} h outside the demo range")
+        return 1
+
+    night = bc.load_night(
+        sid, fire, active, ki, pre=pre, dense=True, dense_ranges=[(t0, t1)]
+    )
+    stats = bc.window_stats(night, t0, t1)
+    if not stats.get("ok"):
+        print(f"{sid}: too few events to score")
+        return 1
+    sq = spo2_quality(night.spo2[t0:t1])
+    stats.update(spo2_valid_frac=round(sq["valid_frac"], 3), spo2_gap=sq["gap"])
+
+    cache = open_night_cache(bc.H5_DIR / f"mesa-{sid}.h5")
+    fs = float(cache.fs_pres)
+    q = night_quality(cache.load_pres()[int(t0 * fs) : int(t1 * fs)], fs)
+    if not q["ok"]:
+        print(
+            f"  warning: {sid} nasal pressure dead={q['flat_frac']:.3f} "
+            f"longest_run={q['flat_run']}s",
+            flush=True,
+        )
+    if not sq["ok"]:
+        print(
+            f"  warning: {sid} SpO2 valid={sq['valid_frac']:.2f} gap={sq['gap']}s",
+            flush=True,
+        )
+
+    ahi = nsrr_ahi(sid)
+    story = story_for(sid, story, ahi)
+    cohort = {
+        "threshold": bc.THR,
+        "ahi_nsrr": ahi,
+        "selection": (
+            f"MESA {sid} was chosen as a severity example (NSRR AHI "
+            f"{'unknown' if ahi is None else f'{ahi:.1f}'}), not as the top-ranked "
+            "night. Fewer events per hour means more quiet between clusters, so each "
+            "advance and retract is a separate visible decision."
+        ),
+    }
+    pack = build(night, stats, cohort, story=story, out_name=out_name)
+    m = pack["meta"]["metrics"]["model"]
+    merge_index(
+        {
+            "id": story.id,
+            "pack_id": out_name,
+            "title": story.title,
+            "watch": pack["meta"]["story"]["watch"],
+            "policy": story.policy,
+            "subject_id": sid,
+            "clip_start_sec": t0,
+            "duration_sec": t1 - t0,
+            "metrics": m,
+            "metrics_oracle_oa": None,
+            "cohort": cohort,
+        },
+        make_default=make_default,
+    )
+    print(
+        f"night clip: MESA {sid} {(t1 - t0) / 3600:.1f} h "
+        f"cov={m['n_covered']}/{m['n_linked']} adv={m['advances']} "
+        f"frac={m['fraction_advanced']} spo2min={m['spo2_min']} "
+        f"scored={float(np.mean(night.scored[t0:t1])):.3f}",
+        flush=True,
+    )
+    return 0
+
+
 def main() -> int:
-    limit = int(sys.argv[1]) if len(sys.argv) > 1 else 0
+    argv = sys.argv[1:]
+    if "--sid" in argv:
+        sid = argv[argv.index("--sid") + 1]
+        story = STORY if "--headline" in argv else MILD_STORY
+        out_name = argv[argv.index("--id") + 1] if "--id" in argv else story.id
+        return build_subject(sid, story, out_name, make_default="--default" in argv)
+    limit = int(argv[0]) if argv else 0
     ki = bc.keep_idx_164()
     fire = joblib.load(bc.MODEL_DIR / "xgb_fire_now.joblib")
     active = joblib.load(bc.MODEL_DIR / "xgb_active.joblib")

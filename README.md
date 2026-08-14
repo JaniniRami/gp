@@ -15,7 +15,8 @@ Nothing to the right of the cursor is drawn: signals, scored events, and arousal
 | `static/` | Live-replay website |
 | `server.py` | Local server (opens the browser, optional ESP serial) |
 | `data/clips/*.json` | Example clip library (waveforms, events, model scores) |
-| `data/clips/full_night.json` | Whole-night replay of the best-performing held-out night |
+| `data/clips/full_night.json` | Whole-night replay of the best-performing held-out night (severe) |
+| `data/clips/mild_night.json` | Whole-night replay of a mild held-out night (clear duty cycle) |
 | `data/clips/*.edf` | Matching 18 min excerpts (Pres 32 Hz + SpO2 1 Hz) |
 | `data/clips/index.json` | Story text, recommended policy and headline metrics per clip |
 | `data/pack.json` | Copy of the flagship 18 min clip (fallback when no clip index is readable) |
@@ -58,6 +59,26 @@ This night was picked by `_build_night.py` on the legacy sparse decision grid (c
 nights on that ranking, not a typical night. The stored `meta.cohort` medians (89%
 coverage at 40% advanced) are from that sparse ranking, not the dense 1 Hz grid the
 player now runs.
+
+## Mild night (clearest view of the duty cycle)
+
+On a severe night the model is above the trigger through most of sleep, so the jaw
+stays out and the advance/retract cycle is hard to see. Pick **Whole night, mild
+severity** for a night with enough quiet between clusters that each actuation is a
+separate, visible decision.
+
+| Night | NSRR AHI | Arousal-linked covered | Advances | Night advanced | SpO? nadir |
+|---|---|---|---|---|---|
+| MESA 3901, 8.9 h | 5.8 (mild) | 12/14 | 15 (15 retracts) | 19% (fixed MAD = 100%) | 91% |
+
+This is the honest deployable grid: 99.1% of the span scored at 1 Hz, the remaining
+0.9% being the 600 s lookback at the start (drawn as a gap, not a zero). Two linked
+events are missed ù worth showing rather than hiding.
+
+Caveats to state if asked: this night is **hypopnea-dominated** (only 1 scored
+obstructive apnea), so use MESA 2934 for the OA story, and it carries a lot of scored
+WASO (55% of the span is wake), which is why the jaw is home so much of the recording.
+MESA 3901 was chosen as a severity example, not as the top-ranked night.
 
 ## Example library
 
@@ -268,6 +289,18 @@ Rebuilding the whole-night clip (needs the MESA caches): `python _build_night.py
 ranks every held-out night, prints the top candidates and the cohort medians, and writes
 `data/clips/full_night.json` plus a merged `index.json`. Run `_build_clips.py` first if you
 are rebuilding both; each script preserves the other's entries.
+
+To build a named night for one chosen held-out subject, skipping the ranking (this is how
+the mild night was made):
+
+```bash
+python _build_night.py --sid 3901              # writes data/clips/mild_night.json
+python _build_night.py --sid 3901 --default    # ...and opens the demo on it
+```
+
+The subject must be in the held-out test split; the script refuses otherwise. It records
+the NSRR AHI and "chosen as a severity example, not the top-ranked night" in the pack's
+`meta.cohort`.
 
 To refill a deployable 1 Hz grid on existing clips (fills legacy Unsure pads that
 used to be stored as fake zeros, and adds `pre_onset`): `python _rescore_dense.py`.
